@@ -19,6 +19,9 @@ cd osint-correlation-engine
 REVIEW_REF=v0.2.0-alpha.1 scripts/clean-install-review.sh
 ```
 
+If Docker access on the review host requires sudo, set
+`OSINT_DOCKER_SUDO=1` for that command.
+
 The script clones the requested ref again into a temporary directory, creates
 four independent one-time secrets, uses a unique Compose project and host port,
 waits for readiness, exercises public endpoints, and runs the versioned

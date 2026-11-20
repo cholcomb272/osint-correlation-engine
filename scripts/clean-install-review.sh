@@ -8,6 +8,10 @@ REVIEW_REF="${REVIEW_REF:-main}"
 REVIEW_PORT="${REVIEW_PORT:-18787}"
 REVIEW_OUTPUT_DIR="${REVIEW_OUTPUT_DIR:-$PWD/artifacts/clean-install-review-$(date -u +%Y%m%dT%H%M%SZ)}"
 REVIEW_PROJECT="osint_review_${$}"
+DOCKER=(docker)
+if [ "${OSINT_DOCKER_SUDO:-0}" = "1" ]; then
+  DOCKER=(sudo -n docker)
+fi
 
 case "$REVIEW_PORT" in
   ''|*[!0-9]*) echo "REVIEW_PORT must be numeric" >&2; exit 2 ;;
@@ -29,7 +33,7 @@ chmod 700 "$REVIEW_OUTPUT_DIR"
 cleanup() {
   status=$?
   if [ -d "$checkout" ]; then
-    (cd "$checkout" && docker compose --project-name "$REVIEW_PROJECT" down -v --remove-orphans) >/dev/null 2>&1 || true
+    (cd "$checkout" && "${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" down -v --remove-orphans) >/dev/null 2>&1 || true
   fi
   case "$review_root" in
     /tmp/osint-review.*) rm -rf -- "$review_root" ;;
@@ -57,8 +61,8 @@ PY
 chmod 600 .env
 
 git rev-parse HEAD > "$REVIEW_OUTPUT_DIR/commit.txt"
-docker compose --project-name "$REVIEW_PROJECT" config --quiet
-docker compose --project-name "$REVIEW_PROJECT" up --build -d
+"${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" config --quiet
+"${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" up --build -d
 
 ready=0
 for _attempt in $(seq 1 60); do
@@ -68,9 +72,9 @@ for _attempt in $(seq 1 60); do
   fi
   sleep 2
 done
-docker compose --project-name "$REVIEW_PROJECT" ps --all > "$REVIEW_OUTPUT_DIR/compose-ps.txt"
+"${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" ps --all > "$REVIEW_OUTPUT_DIR/compose-ps.txt"
 if [ "$ready" -ne 1 ]; then
-  docker compose --project-name "$REVIEW_PROJECT" logs --no-color > "$REVIEW_OUTPUT_DIR/compose.log" 2>&1
+  "${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" logs --no-color > "$REVIEW_OUTPUT_DIR/compose.log" 2>&1
   echo "Clean installation did not become ready; inspect $REVIEW_OUTPUT_DIR" >&2
   exit 1
 fi
@@ -78,8 +82,8 @@ fi
 curl -fsS "http://127.0.0.1:${REVIEW_PORT}/health" > "$REVIEW_OUTPUT_DIR/health.json"
 curl -fsS "http://127.0.0.1:${REVIEW_PORT}/api/public/incidents?days=30&page_size=5" > "$REVIEW_OUTPUT_DIR/incidents.json"
 curl -fsS "http://127.0.0.1:${REVIEW_PORT}/api/public/topology?days=30&page_size=20" > "$REVIEW_OUTPUT_DIR/topology.json"
-docker compose --project-name "$REVIEW_PROJECT" exec -T worker python -m app.cli benchmark > "$REVIEW_OUTPUT_DIR/benchmark.json"
-docker compose --project-name "$REVIEW_PROJECT" logs --no-color > "$REVIEW_OUTPUT_DIR/compose.log" 2>&1
+"${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" exec -T worker python -m app.cli benchmark > "$REVIEW_OUTPUT_DIR/benchmark.json"
+"${DOCKER[@]}" compose --project-name "$REVIEW_PROJECT" logs --no-color > "$REVIEW_OUTPUT_DIR/compose.log" 2>&1
 
 python3 - "$REVIEW_OUTPUT_DIR" "$REVIEW_REF" <<'PY'
 import json
