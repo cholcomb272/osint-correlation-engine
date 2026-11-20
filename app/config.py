@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     api_token: SecretStr | None = None
+    audit_hash_salt: SecretStr | None = None
     cors_origins: str = ""
     public_rate_limit_per_minute: int = Field(120, ge=10, le=10000)
     max_request_bytes: int = Field(1_048_576, ge=1024, le=10_000_000)
@@ -19,8 +20,11 @@ class Settings(BaseSettings):
     def validate_production(self):
         if self.app_env.casefold() == "production":
             token = self.api_token.get_secret_value() if self.api_token else ""
+            audit_salt = self.audit_hash_salt.get_secret_value() if self.audit_hash_salt else ""
             if len(token) < 32:
                 raise ValueError("API_TOKEN must be at least 32 characters in production")
+            if len(audit_salt) < 32:
+                raise ValueError("AUDIT_HASH_SALT must be at least 32 characters in production")
         return self
 
 

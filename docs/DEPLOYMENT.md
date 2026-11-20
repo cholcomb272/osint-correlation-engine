@@ -2,6 +2,8 @@
 
 The Compose defaults are intentionally restrictive: no PostgreSQL host port, non-root images, `no-new-privileges`, read-only API/worker filesystems, bounded tmpfs, strict same-origin browser behavior, and loopback host binding.
 
+`POSTGRES_PASSWORD`, `APP_DB_PASSWORD`, `API_TOKEN`, and `AUDIT_HASH_SALT` are independent required settings. Compose fails during interpolation if any is absent; there are no cross-secret fallbacks.
+
 For production:
 
 1. terminate TLS at a maintained reverse proxy;

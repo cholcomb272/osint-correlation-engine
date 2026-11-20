@@ -1,5 +1,14 @@
 # Release notes
 
+## 0.1.0-beta.2 — 2026-11-20
+
+### Security hardening
+
+- Compose now requires `POSTGRES_PASSWORD`, `APP_DB_PASSWORD`, `API_TOKEN`, and `AUDIT_HASH_SALT` independently.
+- Removed the runtime-database-password fallback to the PostgreSQL owner password.
+- Removed the audit-hash-salt fallback to the administrative API token.
+- Production configuration validates that the audit salt is present and at least 32 characters.
+
 ## 0.1.0-beta.1 — 2026-11-20
 
 ### Added

@@ -1156,7 +1156,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="OSINT Correlation Engine",
-    version="0.1.0-beta.1",
+    version="0.1.0-beta.2",
     description="Evidence-driven public infrastructure disruption intelligence. Correlation scores are explainable heuristics, not attribution probabilities.",
     lifespan=lifespan,
 )

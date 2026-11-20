@@ -41,6 +41,8 @@ Compose preserves the existing `pgdata` volume. On an upgrade from the prototype
 
 The default host bind is loopback. For a trusted LAN, set `BIND_ADDRESS=0.0.0.0` and put TLS at a reverse proxy before exposing the service beyond that LAN. PostgreSQL is not published to the host.
 
+Compose requires all four secrets and refuses to render when any is missing. `APP_DB_PASSWORD` never falls back to the PostgreSQL owner password, and `AUDIT_HASH_SALT` never falls back to the administrative API token.
+
 ## Collection and administration
 
 The worker collects automatically. Administrators can trigger an idempotent backfill without putting the API secret in a browser:

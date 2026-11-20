@@ -26,7 +26,7 @@ services:
       ADMIN_DB_USER: osint
       ADMIN_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       APP_DB_USER: osint_app
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
     depends_on:
       db:
         condition: service_healthy
@@ -57,11 +57,11 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: osint_app
-      DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
       DB_NAME: osint
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
       APP_ENV: production
-      AUDIT_HASH_SALT: ${AUDIT_HASH_SALT:-${API_TOKEN}}
+      AUDIT_HASH_SALT: ${AUDIT_HASH_SALT:?Set AUDIT_HASH_SALT in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       PUBLIC_RATE_LIMIT_PER_MINUTE: ${PUBLIC_RATE_LIMIT_PER_MINUTE:-120}
       MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-1048576}
@@ -91,7 +91,7 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: osint_app
-      DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
       DB_NAME: osint
       POLL_MINUTES: ${POLL_MINUTES:-15}
       MEASUREMENT_POLL_MINUTES: ${MEASUREMENT_POLL_MINUTES:-60}
