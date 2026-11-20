@@ -1,0 +1,14 @@
+{
+  "synthetic": true,
+  "notice": "These records are deterministic validation fixtures, not real incidents.",
+  "events": [
+    {"source":"synthetic_demo","title":"Synthetic: unrelated mail delay","url":"https://example.org/synthetic/mail-delay","observed_at":"2026-11-17T10:00:00Z","category":"service_incident","provider":"demo-mail","region":"us-east4","detail":"Unrelated operational mail queue delay."},
+    {"source":"synthetic_demo","title":"Synthetic: unrelated storage latency","url":"https://example.org/synthetic/storage-latency","observed_at":"2026-11-17T10:02:00Z","category":"service_incident","provider":"demo-storage","region":"europe-west2","detail":"Simultaneous but technically unrelated storage issue."},
+    {"source":"synthetic_status_a","title":"Synthetic: downstream DNS failures","url":"https://example.org/synthetic/downstream-dns","observed_at":"2026-11-17T12:00:00Z","category":"service_incident","provider":"demo-upstream","asn":"AS64500","region":"us-west1","detail":"Downstream services report DNS failures."},
+    {"source":"synthetic_status_b","title":"Synthetic: upstream DNS routing disruption","url":"https://example.org/synthetic/upstream-dns","observed_at":"2026-11-17T12:08:00Z","category":"service_incident","provider":"demo-upstream","asn":"AS64500","region":"us-west1","detail":"Independent synthetic status report for shared infrastructure."},
+    {"source":"synthetic_demo","title":"Synthetic: emergency defensive patch restart","url":"https://example.org/synthetic/defensive-patch","observed_at":"2026-11-17T14:00:00Z","category":"service_incident","provider":"demo-compute","region":"europe-west2","cause_classification":"defensive_remediation_disruption","detail":"Synthetic operator confirmation of defensive remediation disruption."},
+    {"source":"synthetic_demo","title":"Synthetic: scheduled database maintenance","url":"https://example.org/synthetic/maintenance","observed_at":"2026-11-27T03:00:00Z","category":"scheduled_maintenance","provider":"demo-database","scheduled_start_at":"2026-11-27T03:00:00Z","scheduled_end_at":"2026-11-27T05:00:00Z","detail":"Future scheduled window; not an occurred outage."},
+    {"source":"synthetic_news","title":"Synthetic: reporting policy form announced","url":"https://example.org/synthetic/policy","observed_at":"2026-11-17T12:01:00Z","category":"policy_announcement","detail":"General policy news that must not correlate with an outage."},
+    {"source":"synthetic_delayed","title":"Synthetic: delayed network report","url":"https://example.org/synthetic/delayed","observed_at":"2026-11-17T12:03:00Z","publisher_reported_at":"2026-11-18T12:03:00Z","category":"service_incident","provider":"demo-upstream","asn":"AS64500","detail":"Available only after the original observation time."}
+  ]
+}

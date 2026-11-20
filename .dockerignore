@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.pytest_cache
+**/__pycache__
+*.py[cod]
+*.db
+.venv
+frontend/node_modules
+frontend/dist
+osint-*-report-*.json
+*.log
+htmlcov
+playwright-report
+test-results
+artifacts
+backups

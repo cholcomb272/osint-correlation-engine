@@ -1,0 +1,116 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: osint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: osint
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osint -d osint"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  db-bootstrap:
+    build: .
+    command: ["python", "-m", "app.db_bootstrap"]
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: osint
+      ADMIN_DB_USER: osint
+      ADMIN_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      APP_DB_USER: osint_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: osint
+      DB_NAME: osint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build: .
+    init: true
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: osint_app
+      DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+      DB_NAME: osint
+      API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      APP_ENV: production
+      AUDIT_HASH_SALT: ${AUDIT_HASH_SALT:-${API_TOKEN}}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      PUBLIC_RATE_LIMIT_PER_MINUTE: ${PUBLIC_RATE_LIMIT_PER_MINUTE:-120}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-1048576}
+      AUTO_CREATE_SCHEMA: "false"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-8787}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    init: true
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: osint_app
+      DB_PASSWORD: ${APP_DB_PASSWORD:-${POSTGRES_PASSWORD}}
+      DB_NAME: osint
+      POLL_MINUTES: ${POLL_MINUTES:-15}
+      MEASUREMENT_POLL_MINUTES: ${MEASUREMENT_POLL_MINUTES:-60}
+      WORKER_METRICS_PORT: 9101
+      APP_ENV: production
+      RETENTION_ENABLED: ${RETENTION_ENABLED:-false}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
+      COLLECTOR_RUN_RETENTION_DAYS: ${COLLECTOR_RUN_RETENTION_DAYS:-180}
+      CORRELATION_RETENTION_DAYS: ${CORRELATION_RETENTION_DAYS:-180}
+      AUTO_CREATE_SCHEMA: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+volumes:
+  pgdata:
