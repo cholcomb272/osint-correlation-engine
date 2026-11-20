@@ -93,6 +93,19 @@
       "expected": {"candidate": true, "required_components": ["contradictory_evidence"], "maximum_strength": 0.43}
     },
     {
+      "id": "single-system-multiple-modalities",
+      "description": "Distinct modalities from one telemetry system remain limited-source evidence, not independent corroboration.",
+      "events": [
+        {"title": "Routing outage", "observed_at": "2026-01-15T12:00:00Z", "asn": "AS64502"},
+        {"title": "Network unreachable", "observed_at": "2026-01-15T12:04:00Z", "asn": "AS64502"}
+      ],
+      "measurements": [
+        {"source": "ioda", "signal_type": "bgp_visibility_drop", "observed_at": "2026-01-15T12:01:00Z", "asn": "AS64502", "z_score": 5, "detail": {"observation_family": "bgp_control_plane"}},
+        {"source": "ioda", "signal_type": "reachability_loss", "observed_at": "2026-01-15T12:02:00Z", "asn": "AS64502", "z_score": 4, "detail": {"observation_family": "active_reachability"}}
+      ],
+      "expected": {"candidate": true, "independent_technical": false, "forbidden_relationships": ["independent_corroboration"], "maximum_strength": 0.62}
+    },
+    {
       "id": "delayed-report-replay",
       "description": "Historical replay excludes an event whose report was unavailable at the cutoff.",
       "mode": "replay",

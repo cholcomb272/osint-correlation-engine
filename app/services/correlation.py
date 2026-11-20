@@ -218,7 +218,10 @@ def evaluate_pair(
 
     left_network = _measurements_for_event(left, measurements)
     right_network = _measurements_for_event(right, measurements)
-    measurement_sources = {item.source.casefold() for item in [*left_network, *right_network]}
+    left_sources = {item.source.casefold() for item in left_network}
+    right_sources = {item.source.casefold() for item in right_network}
+    measurement_sources = left_sources | right_sources
+    shared_sources = left_sources & right_sources
     left_families = {measurement_observation_family(item) for item in left_network}
     right_families = {measurement_observation_family(item) for item in right_network}
     shared_families = left_families & right_families
@@ -226,6 +229,7 @@ def evaluate_pair(
         left_network
         and right_network
         and len(shared_families) >= 2
+        and len(shared_sources) >= 2
     )
     if left_network or right_network:
         max_z = max(abs(item.z_score or 0) for item in [*left_network, *right_network])
@@ -236,13 +240,21 @@ def evaluate_pair(
         components["independent_technical_corroboration"] = 0.10
         relationships.append("independent_corroboration")
         supporting.append(
-            "multiple independent observation modalities overlap both incident scopes: "
+            "multiple observation modalities and telemetry systems overlap both "
+            "incident scopes: "
             + ", ".join(sorted(shared_families))
+            + " via "
+            + ", ".join(sorted(shared_sources))
         )
-    elif len(measurement_sources) >= 2 and len(shared_families) < 2:
+    elif left_network and right_network and len(shared_families) < 2:
         contradicting.append(
             "multiple telemetry feeds use the same observation modality; this is not "
             "independent technical corroboration"
+        )
+    elif left_network and right_network and len(shared_sources) < 2:
+        contradicting.append(
+            "multiple observation modalities come from fewer than two shared telemetry "
+            "systems; this is not independent technical corroboration"
         )
 
     independent_publishers = left.source.casefold() != right.source.casefold()
@@ -313,6 +325,7 @@ def evaluate_pair(
                 str(right.id): sorted(right_families),
             },
             "technical_sources": sorted(measurement_sources),
+            "shared_technical_sources": sorted(shared_sources),
         },
     )
 

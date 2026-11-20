@@ -25,6 +25,8 @@ Publisher independence and independent technical corroboration are different fie
 Telemetry system names are also distinct from observation modalities. For
 example, RIPE RIS BGP activity and an IODA BGP-derived event remain one
 `bgp_control_plane` modality, not two independent technical observations.
+Likewise, multiple modalities exposed by one aggregator remain limited-source
+evidence until a second shared telemetry system corroborates both event scopes.
 
 ## Coverage semantics
 

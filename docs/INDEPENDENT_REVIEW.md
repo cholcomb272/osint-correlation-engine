@@ -16,7 +16,7 @@ Run the current public tag or commit:
 ```bash
 git clone https://github.com/cholcomb272/osint-correlation-engine.git
 cd osint-correlation-engine
-REVIEW_REF=v0.2.0-alpha.1 scripts/clean-install-review.sh
+REVIEW_REF=v0.2.0-alpha.2 scripts/clean-install-review.sh
 ```
 
 If Docker access on the review host requires sudo, set

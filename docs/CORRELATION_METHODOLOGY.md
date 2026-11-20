@@ -28,9 +28,11 @@ An event pair must be time-compatible, incident-type compatible, and have a posi
 
 Different publishers do not prove technical independence. Known shared upstream
 derivation is discounted. Independent technical corroboration requires at least
-two distinct observation modalities associated with both event scopes. Multiple
-APIs reporting the same BGP control-plane behavior do not satisfy that rule;
-BGP plus active reachability, DNS, or another technically distinct modality can.
+two distinct observation modalities and at least two shared telemetry systems
+associated with both event scopes. Multiple APIs reporting the same BGP
+control-plane behavior do not satisfy that rule. Multiple modalities from one
+aggregator also remain limited-source evidence rather than independent
+corroboration.
 
 ## Confidence language
 
@@ -47,7 +49,8 @@ Historical views compute rolling daily frequency by provider, region, or categor
 `python -m app.cli benchmark` evaluates versioned synthetic scenarios covering
 timing-only coincidences, confirmed dependencies, defensive remediation,
 maintenance, shared-upstream duplication, independent network modalities,
-same-modality feeds, contradictory evidence, and delayed historical reports.
+same-modality feeds, limited-source multi-modal evidence, contradictory
+evidence, and delayed historical reports.
 The emitted confusion matrix and precision/recall values detect code regressions
 against those fixtures only. They are not real-world accuracy estimates or
 calibrated probability claims.
