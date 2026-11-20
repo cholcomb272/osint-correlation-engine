@@ -34,6 +34,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 logger = logging.getLogger(__name__)
 
 from app.logging_config import configure_logging
+from app.services.network_targets import (
+    NetworkTarget,
+    build_asn_scopes,
+    select_announced_prefixes,
+    targets_for_scope,
+)
 
 configure_logging()
 
@@ -296,10 +302,12 @@ PROVIDER_METADATA = {
 }
 
 RIPESTAT_BGP_ACTIVITY_URL = "https://stat.ripe.net/data/bgp-update-activity/data.json"
+RIPESTAT_ANNOUNCED_PREFIXES_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
 IODA_OUTAGE_EVENTS_URL = "https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events"
 OUTBOUND_ALLOWED_HOSTS = {
     *(urlsplit(url).hostname for url in SOURCES.values()),
     urlsplit(RIPESTAT_BGP_ACTIVITY_URL).hostname,
+    urlsplit(RIPESTAT_ANNOUNCED_PREFIXES_URL).hostname,
     urlsplit(IODA_OUTAGE_EVENTS_URL).hostname,
 }
 MEASUREMENT_SIGNAL_TYPES = {
@@ -622,11 +630,13 @@ def measurement_dict(measurement: NetworkMeasurement) -> dict:
 
 
 def ripe_measurements_from_payload(
-    provider: str,
+    provider: str | None,
     asn: str,
     prefix: str,
     payload: dict,
     source_url: str,
+    *,
+    target_metadata: dict | None = None,
 ) -> list[MeasurementIn]:
     updates = payload.get("data", {}).get("updates", [])
     results: list[MeasurementIn] = []
@@ -665,9 +675,13 @@ def ripe_measurements_from_payload(
                     detail=json.dumps(
                         {
                             "representative_prefix": True,
+                            "observation_family": "bgp_control_plane",
+                            "telemetry_system": "ripe_ris",
+                            "target": target_metadata or {},
+                            "sampling_period_seconds": payload.get("data", {}).get("sampling_period"),
                             "interpretation": (
-                                "Routing activity for a representative provider prefix; "
-                                "not proof of provider-wide impact."
+                                "Routing activity observed through RIPE RIS for a bounded "
+                                "ASN-derived prefix target; not proof of provider-wide impact."
                             ),
                         }
                     ),
@@ -677,7 +691,7 @@ def ripe_measurements_from_payload(
 
 
 def ioda_measurements_from_payload(
-    provider: str,
+    provider: str | None,
     asn: str,
     payload: dict,
     source_url: str,
@@ -687,10 +701,13 @@ def ioda_measurements_from_payload(
         datasource = str(event.get("datasource") or "unknown")
         if datasource == "bgp":
             signal_type = "bgp_visibility_drop"
+            observation_family = "bgp_control_plane"
         elif datasource.startswith("ping"):
             signal_type = "reachability_loss"
+            observation_family = "active_reachability"
         else:
             signal_type = "traffic_anomaly"
+            observation_family = "network_telescope"
         start = event.get("start")
         if start is None:
             continue
@@ -710,6 +727,8 @@ def ioda_measurements_from_payload(
                 detail=json.dumps(
                     {
                         "datasource": datasource,
+                        "observation_family": observation_family,
+                        "telemetry_system": "ioda",
                         "duration_seconds": event.get("duration"),
                         "method": event.get("method"),
                         "location_name": event.get("location_name"),
@@ -732,6 +751,8 @@ def collect_network_measurements(
 
     current_time = as_utc(now or datetime.now(timezone.utc))
     start_time = current_time - timedelta(days=days)
+    prefixes_per_asn = max(1, min(8, int(os.getenv("BGP_PREFIXES_PER_ASN", "4"))))
+    maximum_asns = max(1, min(50, int(os.getenv("MAX_MONITORED_ASNS", "12"))))
     summary: dict[str, dict[str, int | str]] = {}
     try:
         with httpx.Client(
@@ -740,52 +761,134 @@ def collect_network_measurements(
             headers={"User-Agent": "OSINT-Correlation-Research/1.0"},
         ) as client:
             with SessionLocal() as db:
-                for provider, metadata in PROVIDER_METADATA.items():
+                recent_events = db.scalars(
+                    select(Event)
+                    .where(
+                        Event.asn.is_not(None),
+                        Event.observed_at >= current_time - timedelta(days=max(days, 30)),
+                        Event.observed_at <= current_time,
+                    )
+                    .order_by(Event.observed_at.desc())
+                    .limit(2000)
+                ).all()
+                scopes = build_asn_scopes(
+                    recent_events,
+                    PROVIDER_METADATA,
+                    maximum_asns=maximum_asns,
+                )
+                targets: dict[tuple[str, str], NetworkTarget] = {}
+                for scope in scopes:
+                    summary_key = f"discovery:{scope.asn}"
+                    try:
+                        response = fetch_public_source(
+                            client,
+                            RIPESTAT_ANNOUNCED_PREFIXES_URL,
+                            params={
+                                "resource": scope.asn,
+                                "starttime": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "endtime": current_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "min_peers_seeing": 10,
+                                "sourceapp": "osint-correlation-engine",
+                            },
+                        )
+                        payload = response.json()
+                        if payload.get("status") != "ok":
+                            raise ValueError(payload.get("messages") or "RIPEstat error")
+                        discovered = targets_for_scope(
+                            scope,
+                            payload,
+                            prefixes_per_asn=prefixes_per_asn,
+                        )
+                        for target in discovered:
+                            targets[(target.asn, target.prefix)] = target
+                        summary[summary_key] = {
+                            "added": 0,
+                            "updated": 0,
+                            "parsed": len(discovered),
+                            "available_prefixes": len(payload.get("data", {}).get("prefixes", [])),
+                            "selection_reason": scope.selection_reason,
+                        }
+                    except Exception as exc:
+                        fallback = select_announced_prefixes(
+                            {}, seed_prefixes=scope.seed_prefixes, limit=prefixes_per_asn
+                        )
+                        for prefix, reason in fallback:
+                            target = NetworkTarget(
+                                asn=scope.asn,
+                                provider=scope.provider,
+                                prefix=prefix,
+                                selection_reason=reason,
+                                scope_reason=scope.selection_reason,
+                                discovery_source="configured_fallback",
+                                incident_aware=scope.incident_aware,
+                            )
+                            targets[(target.asn, target.prefix)] = target
+                        logger.warning(
+                            "Network target discovery failed for %s: %s",
+                            scope.asn,
+                            exc,
+                        )
+                        summary[summary_key] = {
+                            "error": str(exc)[:250],
+                            "parsed": len(fallback),
+                        }
+
+                for target in targets.values():
+                    summary_key = f"ripe:{target.asn}:{target.prefix}"
                     try:
                         response = fetch_public_source(
                             client,
                             RIPESTAT_BGP_ACTIVITY_URL,
                             params={
-                                "resource": metadata["prefix"],
+                                "resource": target.prefix,
                                 "starttime": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                                 "endtime": current_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                                 "max_samples": 0,
                                 "min_sampling_period": 3600,
                                 "hide_empty_samples": "false",
+                                "sourceapp": "osint-correlation-engine",
                             },
                         )
                         payload = response.json()
                         if payload.get("status") != "ok":
                             raise ValueError(payload.get("messages") or "RIPEstat error")
                         parsed = ripe_measurements_from_payload(
-                            provider,
-                            metadata["asn"],
-                            metadata["prefix"],
+                            target.provider,
+                            target.asn,
+                            target.prefix,
                             payload,
                             str(response.url),
+                            target_metadata={
+                                "selection_reason": target.selection_reason,
+                                "scope_reason": target.scope_reason,
+                                "discovery_source": target.discovery_source,
+                                "incident_aware": target.incident_aware,
+                            },
                         )
                         added, updated = upsert_measurements(db, parsed)
-                        summary[provider] = {
+                        summary[summary_key] = {
                             "added": added,
                             "updated": updated,
                             "parsed": len(parsed),
                         }
                     except Exception as exc:
                         logger.warning(
-                            "Network measurement collection failed for %s: %s",
-                            provider,
+                            "RIPE measurement collection failed for %s %s: %s",
+                            target.asn,
+                            target.prefix,
                             exc,
                         )
-                        summary[provider] = {"error": str(exc)[:250]}
-                for provider, metadata in PROVIDER_METADATA.items():
-                    summary_key = f"ioda:{provider}"
+                        summary[summary_key] = {"error": str(exc)[:250]}
+
+                for scope in scopes:
+                    summary_key = f"ioda:{scope.asn}"
                     try:
                         response = fetch_public_source(
                             client,
                             IODA_OUTAGE_EVENTS_URL,
                             params={
                                 "entityType": "asn",
-                                "entityCode": metadata["asn"].removeprefix("AS"),
+                                "entityCode": scope.asn.removeprefix("AS"),
                                 "from": int(start_time.timestamp()),
                                 "until": int(current_time.timestamp()),
                                 "limit": 1000,
@@ -795,8 +898,8 @@ def collect_network_measurements(
                         if payload.get("error"):
                             raise ValueError(payload["error"])
                         parsed = ioda_measurements_from_payload(
-                            provider,
-                            metadata["asn"],
+                            scope.provider,
+                            scope.asn,
                             payload,
                             str(response.url),
                         )
@@ -808,7 +911,7 @@ def collect_network_measurements(
                         }
                     except Exception as exc:
                         logger.warning(
-                            "IODA collection failed for %s: %s", provider, exc
+                            "IODA collection failed for %s: %s", scope.asn, exc
                         )
                         summary[summary_key] = {"error": str(exc)[:250]}
         return summary
@@ -1156,7 +1259,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="OSINT Correlation Engine",
-    version="0.1.0-beta.2",
+    version="0.2.0-alpha.1",
     description="Evidence-driven public infrastructure disruption intelligence. Correlation scores are explainable heuristics, not attribution probabilities.",
     lifespan=lifespan,
 )

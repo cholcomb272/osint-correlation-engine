@@ -18,6 +18,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt pip-audit
       - run: pytest -q
+      - run: python -m app.cli benchmark
       - run: pip-audit -r requirements.txt
 
   frontend:

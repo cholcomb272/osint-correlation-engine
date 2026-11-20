@@ -4,7 +4,9 @@
 
 - CISA news/advisory RSS: publisher reports, not proof that an infrastructure incident occurred.
 - Cloudflare, GitHub, and Google Cloud status feeds: official provider reports; feed retention bounds backfill.
-- RIPEstat BGP update activity: passive routing activity for representative prefixes; not proof of provider-wide impact.
+- RIPEstat announced-prefix discovery and BGP update activity: passive routing
+  activity for a bounded set of public prefixes originated by configured or
+  recently observed incident ASNs; not proof of provider-wide impact.
 - IODA outage events: passive public anomaly events; data-source and method metadata are retained.
 
 No historical BGP, DNS, traffic, or outage data is fabricated when a source is unavailable.
@@ -20,7 +22,17 @@ Historical replay uses the earliest available knowledge timestamp and excludes r
 Evidence artifacts store original URL, publisher/upstream source, publication/observation/ingestion/retrieval timestamps, SHA-256 content hash, excerpt or structured observation, collection method, reliability, verification state, and bounded raw metadata. User-entered notes are explicitly labeled `investigator_assertion`.
 
 Publisher independence and independent technical corroboration are different fields.
+Telemetry system names are also distinct from observation modalities. For
+example, RIPE RIS BGP activity and an IODA BGP-derived event remain one
+`bgp_control_plane` modality, not two independent technical observations.
 
 ## Coverage semantics
 
-The topology API reports configured/observed prefixes, monitored and incident ASNs/providers, approximate observation cadence, per-resource sample totals, and telemetry sources with no observations in the selected window. Coverage of a representative prefix or ASN is not coverage of every affected service, route, region, or customer path. Sample counts are repeated observations, not independent corroborations.
+The topology API reports configured/observed prefixes, why each target was
+selected, monitored and incident ASNs/providers, observation modality,
+approximate cadence, per-resource sample totals, and telemetry systems with no
+observations in the selected window. Target discovery is deterministic and
+bounded by `BGP_PREFIXES_PER_ASN` and `MAX_MONITORED_ASNS`. Coverage of a
+representative prefix or ASN is not coverage of every affected service, route,
+region, or customer path. Sample counts are repeated observations, not
+independent corroborations.

@@ -13,6 +13,7 @@ The engine helps network engineers, SREs, and researchers distinguish technical 
 - Dedicated scheduled collection worker with checkpoints and health history
 - CISA, Cloudflare Status, GitHub Status, and Google Cloud Status feeds
 - Passive RIPEstat BGP update activity and IODA outage-event telemetry
+- Bounded, incident-aware ASN target discovery using RIPEstat announced prefixes
 - Evidence-strength and telemetry-coverage panels showing representative prefixes, ASN/provider scope, cadence, and missing sources
 - Semantic/type compatibility, dependency, ASN, region, anomaly, maintenance, source-derivation, and contradiction factors
 - Immutable classification history and persistent investigation workspaces
@@ -107,6 +108,16 @@ npm run build
 
 The frontend toolchain requires Node 22. End-to-end tests run with `npm run test:e2e` against a running deployment. Core tests are deterministic and do not call live external services.
 
+Run the versioned correlation-accuracy regression benchmark and optionally save
+its JSON report:
+
+```bash
+python -m app.cli benchmark --output artifacts/correlation-benchmark.json
+```
+
+Its precision/recall figures describe only the published synthetic fixtures;
+they are regression metrics, not real-world calibration or probabilities.
+
 Load the explicitly synthetic demonstration records with:
 
 ```bash
@@ -139,6 +150,10 @@ Set `OSINT_DOCKER_SUDO=1` when Docker access on the host requires `sudo`. The ve
 Do not commit `.env`. The dashboard contains no secret and does not use browser local storage for authentication. Admin writes require the bearer secret or direct server-side CLI access. For internet deployment, add TLS, an identity-aware reverse proxy, centralized secret management, and network-level access restrictions.
 
 Report vulnerabilities according to [SECURITY.md](SECURITY.md). Known constraints and the release security review are in [Release notes](RELEASE_NOTES.md).
+
+External engineers can follow the [independent clean-install review](docs/INDEPENDENT_REVIEW.md)
+and submit the completed [review report](docs/INDEPENDENT_REVIEW_REPORT.md). The
+automation creates evidence; an independent human must still assess semantics.
 
 ## License
 

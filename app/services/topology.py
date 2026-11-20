@@ -1,12 +1,13 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+import json
 from statistics import median
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.main import Event, NetworkMeasurement, PROVIDER_METADATA, as_utc
-from app.services.correlation import candidate_correlations
+from app.services.correlation import candidate_correlations, observation_family
 from app.v2_models import EvidenceArtifact, EventEvidence, Hypothesis, Investigation, InvestigationEvent
 
 
@@ -36,6 +37,7 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
             NetworkMeasurement.provider,
             NetworkMeasurement.asn,
             NetworkMeasurement.signal_type,
+            NetworkMeasurement.detail,
             func.count(NetworkMeasurement.id),
             func.min(NetworkMeasurement.observed_at),
             func.max(NetworkMeasurement.observed_at),
@@ -47,13 +49,21 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
             NetworkMeasurement.provider,
             NetworkMeasurement.asn,
             NetworkMeasurement.signal_type,
+            NetworkMeasurement.detail,
         )
     ).all()
     resources: dict[tuple[str, str, str | None, str | None], dict] = {}
     source_counts: defaultdict[str, int] = defaultdict(int)
+    family_counts: defaultdict[str, int] = defaultdict(int)
     interval_estimates: list[float] = []
-    for source, resource, provider, asn, signal_type, count, first, last in rows:
+    for source, resource, provider, asn, signal_type, detail, count, first, last in rows:
         key = (source, resource, provider, asn)
+        family = observation_family(source, signal_type, detail)
+        try:
+            metadata = json.loads(detail or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        target = metadata.get("target") if isinstance(metadata.get("target"), dict) else {}
         entry = resources.setdefault(
             key,
             {
@@ -62,6 +72,9 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
                 "provider": provider,
                 "asn": asn,
                 "signal_types": [],
+                "observation_families": [],
+                "target_selection_reasons": [],
+                "incident_aware": False,
                 "sample_count": 0,
                 "first_observed_at": as_utc(first).isoformat(),
                 "last_observed_at": as_utc(last).isoformat(),
@@ -70,8 +83,13 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
             },
         )
         entry["signal_types"].append(signal_type)
+        entry["observation_families"].append(family)
+        if target.get("selection_reason"):
+            entry["target_selection_reasons"].append(target["selection_reason"])
+        entry["incident_aware"] = entry["incident_aware"] or bool(target.get("incident_aware"))
         entry["sample_count"] += count
         source_counts[source] += count
+        family_counts[family] += count
         if count > 1:
             interval = (as_utc(last) - as_utc(first)).total_seconds() / (count - 1)
             entry["_intervals"].append(interval)
@@ -80,6 +98,9 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
     for entry in resources.values():
         estimates = entry.pop("_intervals")
         entry["signal_types"].sort()
+        entry["signal_types"] = sorted(set(entry["signal_types"]))
+        entry["observation_families"] = sorted(set(entry["observation_families"]))
+        entry["target_selection_reasons"] = sorted(set(entry["target_selection_reasons"]))
         entry["observation_interval_seconds"] = round(median(estimates)) if estimates else None
 
     event_asns = {event.asn for event in events if event.asn}
@@ -101,12 +122,19 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
             if metadata.get("asn")
         }
     )
+    observed_prefixes = sorted(
+        {entry["resource"] for entry in resources.values() if "/" in entry["resource"]}
+    )
     return {
         "window_start": start.isoformat(),
         "window_end": end.isoformat(),
         "configured_prefixes": configured_prefixes,
         "configured_asns": configured_asns,
-        "monitored_prefix_count": len({entry["resource"] for entry in resources.values() if "/" in entry["resource"]}),
+        "observed_prefixes": observed_prefixes,
+        "monitored_prefix_count": len(observed_prefixes),
+        "incident_aware_prefix_count": len(
+            {entry["resource"] for entry in resources.values() if entry["incident_aware"]}
+        ),
         "monitored_asn_count": len(monitored_asns),
         "incident_asn_count": len(event_asns),
         "covered_incident_asn_count": len(event_asns & monitored_asns),
@@ -123,12 +151,18 @@ def telemetry_coverage(db: Session, events: list[Event], *, start: datetime, end
             }
             for source in expected_sources
         ],
+        "observation_families": [
+            {"family": family, "sample_count": count}
+            for family, count in sorted(family_counts.items())
+        ],
+        "observation_family_count": len(family_counts),
         "missing_event_asns": sorted(event_asns - monitored_asns),
         "missing_event_providers": sorted(event_providers - monitored_providers),
         "resources": sorted(resources.values(), key=lambda item: (item["source"], item["provider"] or "", item["resource"]))[:50],
         "scope_note": (
-            "Coverage describes configured representative resources and observation intervals. "
-            "It does not establish visibility across an entire provider network or prove incident impact."
+            "Coverage describes bounded ASN-derived prefix targets, observation modalities, and intervals. "
+            "Repeated samples from one observation family are not independent corroboration, and this "
+            "does not establish visibility across an entire provider network or prove incident impact."
         ),
     }
 

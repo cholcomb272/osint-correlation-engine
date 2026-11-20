@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from pathlib import Path
 
 from sqlalchemy import func, select
 
@@ -16,6 +17,11 @@ def main() -> None:
         command = subcommands.add_parser(name)
         command.add_argument("--days", type=int, default=default, choices=range(1, maximum + 1), metavar=f"1..{maximum}")
     subcommands.add_parser("health")
+    benchmark = subcommands.add_parser(
+        "benchmark", help="run deterministic correlation regression fixtures"
+    )
+    benchmark.add_argument("--fixture", type=Path)
+    benchmark.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.command == "collect":
         result = run_feeds(args.days)
@@ -23,13 +29,23 @@ def main() -> None:
         result = run_measurements(args.days)
     elif args.command == "correlate":
         result = {"relationship_records": run_correlations(args.days)}
-    else:
+    elif args.command == "health":
         with SessionLocal() as db:
             result = {
                 "events": db.scalar(select(func.count()).select_from(Event)),
                 "measurements": db.scalar(select(func.count()).select_from(NetworkMeasurement)),
             }
+    else:
+        from app.services.benchmark import DEFAULT_FIXTURE, run_benchmark
+
+        result = run_benchmark(args.fixture or DEFAULT_FIXTURE)
+        if args.output:
+            args.output.write_text(
+                json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
+            )
     print(json.dumps(result, indent=2, default=str))
+    if args.command == "benchmark" and not result["passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

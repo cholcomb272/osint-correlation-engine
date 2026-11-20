@@ -1,0 +1,108 @@
+{
+  "name": "correlation-safeguards-v1",
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "unrelated-simultaneous-outages",
+      "description": "Unrelated outages at different providers and regions must not correlate on time alone.",
+      "events": [
+        {"title": "API latency in Tokyo", "observed_at": "2026-01-15T12:00:00Z", "provider": "alpha", "region": "asia-northeast1"},
+        {"title": "Email delivery failure in Virginia", "observed_at": "2026-01-15T12:00:00Z", "provider": "beta", "region": "us-east4"}
+      ],
+      "expected": {"candidate": false}
+    },
+    {
+      "id": "confirmed-upstream-dependency",
+      "description": "A documented upstream dependency is retained as distinct technical evidence.",
+      "events": [
+        {"title": "Application unavailable", "observed_at": "2026-01-15T12:00:00Z", "provider": "downstream"},
+        {"title": "Edge routing disruption", "observed_at": "2026-01-15T12:06:00Z", "provider": "upstream"}
+      ],
+      "dependencies": [
+        {"consumer": "downstream", "dependency": "upstream", "status": "confirmed", "confidence": 0.9, "evidence_ids": [1], "explanation": "Synthetic contract and route evidence"}
+      ],
+      "expected": {"candidate": true, "required_relationships": ["confirmed_dependency"], "minimum_strength": 0.3}
+    },
+    {
+      "id": "defensive-remediation-disruption",
+      "description": "Defensive remediation incidents may correlate operationally but are not promoted to intrusion.",
+      "events": [
+        {"title": "Emergency patch caused API disruption", "observed_at": "2026-01-15T12:00:00Z", "provider": "example-cloud", "cause_classification": "defensive_remediation_disruption"},
+        {"title": "API disruption during emergency patch", "observed_at": "2026-01-15T12:12:00Z", "provider": "example-cloud", "cause_classification": "defensive_remediation_disruption"}
+      ],
+      "expected": {"candidate": true, "required_relationships": ["shares_provider"], "independent_technical": false, "maximum_strength": 0.52}
+    },
+    {
+      "id": "scheduled-maintenance-not-outage",
+      "description": "Scheduled maintenance must not be correlated as an active incident.",
+      "events": [
+        {"title": "Scheduled network maintenance", "observed_at": "2026-01-15T12:00:00Z", "provider": "example-cloud", "category": "scheduled_maintenance"},
+        {"title": "Regional network outage", "observed_at": "2026-01-15T12:05:00Z", "provider": "example-cloud"}
+      ],
+      "expected": {"candidate": false}
+    },
+    {
+      "id": "duplicate-upstream-reporting",
+      "description": "Different publishers deriving from one upstream source are discounted and not called technical corroboration.",
+      "events": [
+        {"title": "Resolver outage", "observed_at": "2026-01-15T12:00:00Z", "provider": "dns-co", "source": "publisher-a"},
+        {"title": "Resolver outage update", "observed_at": "2026-01-15T12:03:00Z", "provider": "dns-co", "source": "publisher-b"}
+      ],
+      "evidence": [
+        {"event_id": 1, "publisher": "Publisher A", "upstream_source": "Status Vendor"},
+        {"event_id": 2, "publisher": "Publisher B", "upstream_source": "Status Vendor"}
+      ],
+      "expected": {"candidate": true, "independent_technical": false, "required_components": ["shared_upstream_discount"], "maximum_strength": 0.43}
+    },
+    {
+      "id": "independent-network-modalities",
+      "description": "BGP control-plane and active reachability anomalies jointly cover both incident scopes.",
+      "events": [
+        {"title": "Routing outage", "observed_at": "2026-01-15T12:00:00Z", "asn": "AS64500"},
+        {"title": "Network unreachable", "observed_at": "2026-01-15T12:04:00Z", "asn": "AS64500"}
+      ],
+      "measurements": [
+        {"source": "ripe_stat", "signal_type": "bgp_withdrawals", "observed_at": "2026-01-15T12:01:00Z", "asn": "AS64500", "z_score": 5, "detail": {"observation_family": "bgp_control_plane"}},
+        {"source": "ioda", "signal_type": "reachability_loss", "observed_at": "2026-01-15T12:02:00Z", "asn": "AS64500", "z_score": 4, "detail": {"observation_family": "active_reachability"}}
+      ],
+      "expected": {"candidate": true, "independent_technical": true, "required_relationships": ["observed_network_anomaly", "independent_corroboration"], "minimum_strength": 0.6}
+    },
+    {
+      "id": "same-modality-multiple-feeds",
+      "description": "Two BGP feeds are not two independent observation modalities.",
+      "events": [
+        {"title": "Routing instability", "observed_at": "2026-01-15T12:00:00Z", "asn": "AS64501"},
+        {"title": "Routing instability update", "observed_at": "2026-01-15T12:04:00Z", "asn": "AS64501"}
+      ],
+      "measurements": [
+        {"source": "ripe_stat", "signal_type": "bgp_withdrawals", "observed_at": "2026-01-15T12:01:00Z", "asn": "AS64501", "z_score": 5, "detail": {"observation_family": "bgp_control_plane"}},
+        {"source": "ioda", "signal_type": "bgp_visibility_drop", "observed_at": "2026-01-15T12:02:00Z", "asn": "AS64501", "z_score": 4, "detail": {"observation_family": "bgp_control_plane"}}
+      ],
+      "expected": {"candidate": true, "independent_technical": false, "forbidden_relationships": ["independent_corroboration"], "maximum_strength": 0.7}
+    },
+    {
+      "id": "contradictory-root-cause-evidence",
+      "description": "Contradictory evidence lowers a shared-provider candidate rather than disappearing from the explanation.",
+      "events": [
+        {"title": "Database unavailable", "observed_at": "2026-01-15T12:00:00Z", "provider": "example-cloud"},
+        {"title": "Database errors", "observed_at": "2026-01-15T12:02:00Z", "provider": "example-cloud"}
+      ],
+      "evidence": [
+        {"event_id": 1, "publisher": "Operator", "role": "contradicts", "excerpt": "Confirmed unrelated local configuration fault"}
+      ],
+      "expected": {"candidate": true, "required_components": ["contradictory_evidence"], "maximum_strength": 0.43}
+    },
+    {
+      "id": "delayed-report-replay",
+      "description": "Historical replay excludes an event whose report was unavailable at the cutoff.",
+      "mode": "replay",
+      "cutoff": "2026-01-15T12:00:00Z",
+      "days": 1,
+      "events": [
+        {"title": "Known outage", "observed_at": "2026-01-15T11:40:00Z", "publisher_reported_at": "2026-01-15T11:50:00Z", "provider": "example-cloud"},
+        {"title": "Delayed outage report", "observed_at": "2026-01-15T11:45:00Z", "publisher_reported_at": "2026-01-15T12:20:00Z", "provider": "example-cloud"}
+      ],
+      "expected": {"candidate": false}
+    }
+  ]
+}

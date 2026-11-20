@@ -37,6 +37,9 @@ export interface TelemetryResource {
   provider?: string
   asn?: string
   signal_types: string[]
+  observation_families: string[]
+  target_selection_reasons: string[]
+  incident_aware: boolean
   sample_count: number
   first_observed_at: string
   last_observed_at: string
@@ -48,7 +51,9 @@ export interface TelemetryCoverage {
   window_end: string
   configured_prefixes: string[]
   configured_asns: string[]
+  observed_prefixes: string[]
   monitored_prefix_count: number
+  incident_aware_prefix_count: number
   monitored_asn_count: number
   incident_asn_count: number
   covered_incident_asn_count: number
@@ -58,6 +63,8 @@ export interface TelemetryCoverage {
   provider_coverage_ratio?: number
   observation_interval_seconds?: number
   sources: Array<{ source: string; sample_count: number; status: string }>
+  observation_families: Array<{ family: string; sample_count: number }>
+  observation_family_count: number
   missing_event_asns: string[]
   missing_event_providers: string[]
   resources: TelemetryResource[]

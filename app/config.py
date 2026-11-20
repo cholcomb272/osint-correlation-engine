@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     max_request_bytes: int = Field(1_048_576, ge=1024, le=10_000_000)
     poll_minutes: int = Field(15, ge=1)
     measurement_poll_minutes: int = Field(60, ge=15)
+    bgp_prefixes_per_asn: int = Field(4, ge=1, le=8)
+    max_monitored_asns: int = Field(12, ge=1, le=50)
 
     @model_validator(mode="after")
     def validate_production(self):

@@ -5,6 +5,7 @@ probabilities and never establish attribution.
 """
 
 import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -101,6 +102,36 @@ def _measurements_for_event(
     return matches
 
 
+def observation_family(source: str, signal_type: str, detail_value: str = "") -> str:
+    """Group feeds by observation modality, not publisher/API name."""
+    try:
+        detail = json.loads(detail_value or "{}")
+    except (TypeError, ValueError):
+        detail = {}
+    declared = str(detail.get("observation_family") or "").strip().casefold()
+    if declared:
+        return declared
+    signal = signal_type.casefold()
+    source = source.casefold()
+    if signal in {"bgp_announcements", "bgp_withdrawals", "bgp_visibility_drop"}:
+        return "bgp_control_plane"
+    if signal == "reachability_loss":
+        return "active_reachability"
+    if signal == "dns_failure":
+        return "dns_control_plane"
+    if signal == "traffic_anomaly":
+        return "network_telescope" if source == "ioda" else "traffic_telemetry"
+    return f"unclassified:{source}"
+
+
+def measurement_observation_family(measurement: NetworkMeasurement) -> str:
+    return observation_family(
+        measurement.source,
+        measurement.signal_type,
+        measurement.detail,
+    )
+
+
 def _shared_upstream(evidence: list[tuple[EvidenceArtifact, str]]) -> set[str]:
     return {
         (artifact.upstream_source or artifact.publisher).strip().casefold()
@@ -188,7 +219,14 @@ def evaluate_pair(
     left_network = _measurements_for_event(left, measurements)
     right_network = _measurements_for_event(right, measurements)
     measurement_sources = {item.source.casefold() for item in [*left_network, *right_network]}
-    independent_technical = bool(left_network and right_network and len(measurement_sources) >= 2)
+    left_families = {measurement_observation_family(item) for item in left_network}
+    right_families = {measurement_observation_family(item) for item in right_network}
+    shared_families = left_families & right_families
+    independent_technical = bool(
+        left_network
+        and right_network
+        and len(shared_families) >= 2
+    )
     if left_network or right_network:
         max_z = max(abs(item.z_score or 0) for item in [*left_network, *right_network])
         components["historical_anomaly_magnitude"] = round(min(0.10, max_z / 50), 4)
@@ -197,7 +235,15 @@ def evaluate_pair(
     if independent_technical:
         components["independent_technical_corroboration"] = 0.10
         relationships.append("independent_corroboration")
-        supporting.append("independent technical measurements overlap both incident scopes")
+        supporting.append(
+            "multiple independent observation modalities overlap both incident scopes: "
+            + ", ".join(sorted(shared_families))
+        )
+    elif len(measurement_sources) >= 2 and len(shared_families) < 2:
+        contradicting.append(
+            "multiple telemetry feeds use the same observation modality; this is not "
+            "independent technical corroboration"
+        )
 
     independent_publishers = left.source.casefold() != right.source.casefold()
     left_upstream = _shared_upstream(left_artifacts) or {left.source.casefold()}
@@ -262,6 +308,11 @@ def evaluate_pair(
                 str(right.id): round(abs((knowledge_time(right) - as_utc(right.observed_at)).total_seconds()) / 3600, 2),
             },
             "overlapping_evidence_dimensions": overlapping_dimensions,
+            "technical_observation_families": {
+                str(left.id): sorted(left_families),
+                str(right.id): sorted(right_families),
+            },
+            "technical_sources": sorted(measurement_sources),
         },
     )
 

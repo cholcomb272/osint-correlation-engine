@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -160,6 +161,9 @@ def test_ripe_measurements_include_withdrawals_and_baselines():
     }
     assert all(record.baseline_mean is not None for record in records)
     assert max(record.z_score for record in records) > 1
+    assert {
+        json.loads(record.detail)["observation_family"] for record in records
+    } == {"bgp_control_plane"}
 
 
 def test_ioda_events_map_public_signals_without_local_probing():
@@ -194,6 +198,10 @@ def test_ioda_events_map_public_signals_without_local_probing():
         "traffic_anomaly",
     ]
     assert all("did not probe" in record.detail for record in records)
+    assert [json.loads(record.detail)["observation_family"] for record in records] == [
+        "bgp_control_plane",
+        "network_telescope",
+    ]
 
 
 def test_manual_event_url_must_be_absolute_http_url():

@@ -125,6 +125,25 @@ def test_independent_network_observations_raise_technical_corroboration():
         assert "observed_network_anomaly" in result.relationship_types
 
 
+def test_multiple_bgp_feeds_are_one_observation_modality():
+    engine = database()
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        left = incident(1, "Routing outage", now, asn="AS64500")
+        right = incident(2, "Network unreachable", now + timedelta(minutes=4), asn="AS64500")
+        measurements = [
+            NetworkMeasurement(fingerprint="o" * 64, source="ripe_stat", signal_type="bgp_withdrawals", observed_at=now, provider=None, asn="AS64500", region=None, resource="prefix", value=20, unit="count", z_score=5, confidence=0.9, url="https://stat.ripe.net/x", detail='{"observation_family":"bgp_control_plane"}'),
+            NetworkMeasurement(fingerprint="p" * 64, source="ioda", signal_type="bgp_visibility_drop", observed_at=now, provider=None, asn="AS64500", region=None, resource="asn", value=12, unit="score", z_score=4, confidence=0.8, url="https://ioda.inetintel.cc/x", detail='{"observation_family":"bgp_control_plane"}'),
+        ]
+        db.add_all([left, right, *measurements])
+        db.commit()
+        result = evaluate_pair(db, left, right, measurements=measurements)
+        assert result is not None
+        assert result.independent_technical_corroboration is False
+        assert "independent_corroboration" not in result.relationship_types
+        assert any("same observation modality" in factor for factor in result.contradictory_factors)
+
+
 def test_contradictory_evidence_reduces_strength():
     engine = database()
     now = datetime.now(timezone.utc)

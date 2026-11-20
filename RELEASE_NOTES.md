@@ -1,5 +1,32 @@
 # Release notes
 
+## 0.2.0-alpha.1 — 2026-11-20
+
+### Intelligence coverage and validation
+
+- Replaced the fixed three-prefix network target set with bounded RIPEstat
+  announced-prefix discovery for configured and recent incident ASNs, retaining
+  target-selection provenance and safe seed fallbacks.
+- Added explicit observation modalities so multiple BGP-derived feeds cannot be
+  counted as independent technical corroboration.
+- Expanded the dashboard coverage panel with actual observed prefixes,
+  incident-aware targets, observation modalities, intervals, and scope limits.
+- Added a versioned nine-scenario synthetic benchmark with confusion matrix,
+  precision, recall, specificity, F1, per-scenario diagnostics, CLI JSON export,
+  unit coverage, and CI enforcement.
+- Added a clean-clone review harness, independent-review checklist, and report
+  template. Automation is not represented as an independent human review.
+
+### Known alpha limitations
+
+- RIPEstat target expansion broadens passive BGP visibility but does not prove
+  incident-specific impact or complete provider-prefix coverage.
+- Independent technical corroboration still depends on public modality
+  availability; most historical events will not have two qualifying modalities.
+- Benchmark metrics cover synthetic regression fixtures and are not calibrated
+  estimates of field accuracy.
+- An external engineer must still perform and sign the independent review.
+
 ## 0.1.0-beta.2 — 2026-11-20
 
 ### Security hardening
