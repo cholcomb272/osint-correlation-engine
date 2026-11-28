@@ -6,7 +6,11 @@
     "kind": "official_news",
     "publisher": "Cybersecurity and Infrastructure Security Agency",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "geopolitical_policy"],
+    "geographic_scope": ["US"],
+    "source_role": "official_report",
+    "expected_cadence_minutes": 60
   },
   {
     "id": "cloudflare",
@@ -17,7 +21,10 @@
     "ingest_policy": "all",
     "reliability": 0.9,
     "provider": "cloudflare",
-    "asn": "AS13335"
+    "asn": "AS13335",
+    "domains": ["internet_telecommunications", "cloud_infrastructure"],
+    "source_role": "official_report",
+    "expected_cadence_minutes": 5
   },
   {
     "id": "github",
@@ -28,7 +35,10 @@
     "ingest_policy": "all",
     "reliability": 0.9,
     "provider": "github",
-    "asn": "AS36459"
+    "asn": "AS36459",
+    "domains": ["cloud_infrastructure", "software_supply_chain"],
+    "source_role": "official_report",
+    "expected_cadence_minutes": 5
   },
   {
     "id": "google_cloud",
@@ -39,7 +49,10 @@
     "ingest_policy": "all",
     "reliability": 0.9,
     "provider": "google_cloud",
-    "asn": "AS15169"
+    "asn": "AS15169",
+    "domains": ["cloud_infrastructure", "internet_telecommunications"],
+    "source_role": "official_report",
+    "expected_cadence_minutes": 5
   },
   {
     "id": "federal_news_network_technology",
@@ -48,7 +61,11 @@
     "kind": "publisher_disclosure",
     "publisher": "Federal News Network",
     "ingest_policy": "incidents_only",
-    "reliability": 0.8
+    "reliability": 0.8,
+    "domains": ["cybersecurity", "government", "critical_infrastructure"],
+    "geographic_scope": ["US"],
+    "source_role": "secondary_report",
+    "expected_cadence_minutes": 60
   },
   {
     "id": "bleepingcomputer",
@@ -57,7 +74,10 @@
     "kind": "publisher_disclosure",
     "publisher": "BleepingComputer",
     "ingest_policy": "incidents_only",
-    "reliability": 0.75
+    "reliability": 0.75,
+    "domains": ["cybersecurity", "technology"],
+    "source_role": "secondary_report",
+    "expected_cadence_minutes": 30
   },
   {
     "id": "the_record",
@@ -66,7 +86,10 @@
     "kind": "publisher_disclosure",
     "publisher": "The Record",
     "ingest_policy": "incidents_only",
-    "reliability": 0.8
+    "reliability": 0.8,
+    "domains": ["cybersecurity", "geopolitical_security"],
+    "source_role": "secondary_report",
+    "expected_cadence_minutes": 60
   },
   {
     "id": "cisa_advisories",
@@ -75,7 +98,11 @@
     "kind": "official_advisory",
     "publisher": "Cybersecurity and Infrastructure Security Agency",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "critical_infrastructure"],
+    "geographic_scope": ["US", "global_technology"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 60
   },
   {
     "id": "ncsc_uk",
@@ -84,7 +111,11 @@
     "kind": "official_advisory",
     "publisher": "UK National Cyber Security Centre",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "critical_infrastructure"],
+    "geographic_scope": ["GB", "global_technology"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 120
   },
   {
     "id": "cert_eu",
@@ -93,7 +124,11 @@
     "kind": "official_advisory",
     "publisher": "CERT-EU",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "government"],
+    "geographic_scope": ["EU"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 120
   },
   {
     "id": "cyber_canada",
@@ -102,7 +137,11 @@
     "kind": "official_advisory",
     "publisher": "Canadian Centre for Cyber Security",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "critical_infrastructure"],
+    "geographic_scope": ["CA"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 120
   },
   {
     "id": "cyber_australia",
@@ -111,6 +150,71 @@
     "kind": "official_advisory",
     "publisher": "Australian Cyber Security Centre",
     "ingest_policy": "all",
-    "reliability": 0.9
+    "reliability": 0.9,
+    "domains": ["cybersecurity", "critical_infrastructure"],
+    "geographic_scope": ["AU"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 120
+  },
+  {
+    "id": "usgs_significant_earthquakes",
+    "name": "USGS Significant Earthquakes",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_month.geojson",
+    "kind": "environmental_observation",
+    "publisher": "U.S. Geological Survey",
+    "adapter": "usgs_geojson",
+    "reliability": 0.98,
+    "domains": ["environmental_hazard", "critical_infrastructure_context"],
+    "source_role": "direct_observation",
+    "expected_cadence_minutes": 5
+  },
+  {
+    "id": "gdacs_global_hazards",
+    "name": "GDACS Global Hazards",
+    "url": "https://www.gdacs.org/contentdata/xml/gdacs_app_feed.json",
+    "kind": "environmental_observation",
+    "publisher": "Global Disaster Awareness and Coordination System",
+    "adapter": "gdacs_geojson",
+    "reliability": 0.9,
+    "domains": ["environmental_hazard", "humanitarian", "critical_infrastructure_context"],
+    "source_role": "curated_aggregator",
+    "expected_cadence_minutes": 15
+  },
+  {
+    "id": "nasa_eonet",
+    "name": "NASA EONET",
+    "url": "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=30&limit=500",
+    "kind": "environmental_observation",
+    "publisher": "NASA Earth Observatory Natural Event Tracker",
+    "adapter": "nasa_eonet",
+    "reliability": 0.85,
+    "domains": ["environmental_hazard", "earth_observation"],
+    "source_role": "curated_aggregator",
+    "expected_cadence_minutes": 30
+  },
+  {
+    "id": "noaa_space_weather",
+    "name": "NOAA Space Weather Alerts",
+    "url": "https://services.swpc.noaa.gov/products/alerts.json",
+    "kind": "space_weather_observation",
+    "publisher": "NOAA Space Weather Prediction Center",
+    "adapter": "noaa_swpc_alerts",
+    "reliability": 0.95,
+    "domains": ["space_weather", "critical_infrastructure_context"],
+    "source_role": "direct_observation",
+    "expected_cadence_minutes": 5
+  },
+  {
+    "id": "cisa_kev",
+    "name": "CISA Known Exploited Vulnerabilities",
+    "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "kind": "vulnerability_catalog",
+    "publisher": "Cybersecurity and Infrastructure Security Agency",
+    "adapter": "cisa_kev",
+    "reliability": 0.95,
+    "domains": ["cybersecurity", "software_supply_chain"],
+    "geographic_scope": ["global_technology"],
+    "source_role": "official_advisory",
+    "expected_cadence_minutes": 1440
   }
 ]

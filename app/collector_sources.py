@@ -5,7 +5,7 @@ can supply a replacement registry with ``FEED_SOURCE_REGISTRY``. The configured
 URLs become the collector's complete outbound feed allowlist.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -17,8 +17,28 @@ VALID_KINDS = {
     "publisher_disclosure",
     "official_advisory",
     "official_news",
+    "environmental_observation",
+    "space_weather_observation",
+    "vulnerability_catalog",
+    "transportation_observation",
+    "geopolitical_statement",
 }
 VALID_POLICIES = {"all", "incidents_only"}
+VALID_ADAPTERS = {
+    "syndication",
+    "usgs_geojson",
+    "gdacs_geojson",
+    "nasa_eonet",
+    "noaa_swpc_alerts",
+    "cisa_kev",
+}
+VALID_SOURCE_ROLES = {
+    "direct_observation",
+    "official_report",
+    "official_advisory",
+    "curated_aggregator",
+    "secondary_report",
+}
 DEFAULT_REGISTRY = Path(__file__).with_name("data") / "sources.json"
 
 
@@ -33,6 +53,12 @@ class FeedSource:
     reliability: float = 0.7
     provider: str | None = None
     asn: str | None = None
+    adapter: str = "syndication"
+    domains: list[str] = field(default_factory=lambda: ["general"])
+    geographic_scope: list[str] = field(default_factory=lambda: ["global"])
+    languages: list[str] = field(default_factory=lambda: ["en"])
+    source_role: str = "official_report"
+    expected_cadence_minutes: int | None = None
 
 
 def _source_from_dict(value: dict) -> FeedSource:
@@ -48,6 +74,14 @@ def _source_from_dict(value: dict) -> FeedSource:
         raise ValueError(f"feed source {source.id!r} has unsupported kind {source.kind!r}")
     if source.ingest_policy not in VALID_POLICIES:
         raise ValueError(f"feed source {source.id!r} has unsupported ingest policy")
+    if source.adapter not in VALID_ADAPTERS:
+        raise ValueError(f"feed source {source.id!r} has unsupported adapter {source.adapter!r}")
+    if source.source_role not in VALID_SOURCE_ROLES:
+        raise ValueError(f"feed source {source.id!r} has unsupported source role {source.source_role!r}")
+    if not source.domains or any(not isinstance(value, str) or not value.strip() for value in source.domains):
+        raise ValueError(f"feed source {source.id!r} must declare at least one domain")
+    if source.expected_cadence_minutes is not None and source.expected_cadence_minutes < 1:
+        raise ValueError(f"feed source {source.id!r} cadence must be positive")
     if not 0 <= source.reliability <= 1:
         raise ValueError(f"feed source {source.id!r} reliability must be between zero and one")
     return source

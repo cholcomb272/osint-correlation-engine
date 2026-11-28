@@ -148,6 +148,7 @@ def evaluate_pair(
     right: Event,
     *,
     measurements: list[NetworkMeasurement] | None = None,
+    matched_measurements: dict[int, list[NetworkMeasurement]] | None = None,
     event_evidence: dict[int, list[tuple[EvidenceArtifact, str]]] | None = None,
     window_hours: float = 24,
 ) -> CorrelationAssessment | None:
@@ -233,8 +234,16 @@ def evaluate_pair(
             relationships.append("depends_on")
             supporting.append("an unverified dependency record exists; it is not treated as established")
 
-    left_network = _measurements_for_event(left, measurements)
-    right_network = _measurements_for_event(right, measurements)
+    left_network = (
+        matched_measurements.get(left.id, [])
+        if matched_measurements is not None
+        else _measurements_for_event(left, measurements)
+    )
+    right_network = (
+        matched_measurements.get(right.id, [])
+        if matched_measurements is not None
+        else _measurements_for_event(right, measurements)
+    )
     left_sources = {item.source.casefold() for item in left_network}
     right_sources = {item.source.casefold() for item in right_network}
     measurement_sources = left_sources | right_sources
@@ -377,12 +386,17 @@ def candidate_correlations(
     cutoff: datetime | None = None,
     include_scheduled: bool = False,
     limit: int = 500,
+    event_ids: set[int] | None = None,
 ) -> list[CorrelationAssessment]:
     now = as_utc(cutoff or datetime.now(timezone.utc))
     start = now - timedelta(days=days)
     conditions = [Event.observed_at >= start, Event.observed_at <= now]
     if not include_scheduled:
         conditions.append(Event.category != "scheduled_maintenance")
+    if event_ids is not None:
+        if not event_ids:
+            return []
+        conditions.append(Event.id.in_(event_ids))
     # Historical replay excludes facts not available by the cutoff.
     conditions.append(
         func.coalesce(Event.publisher_reported_at, Event.first_observed_at, Event.ingested_at, Event.observed_at) <= now
@@ -396,6 +410,13 @@ def candidate_correlations(
         ).limit(5000)
     ).all()
     evidence = _evidence_for_events(db, [event.id for event in events])
+    # Matching telemetry is a property of an event, not of a pair. Computing it
+    # once avoids rescanning thousands of measurements for every candidate pair
+    # as source coverage grows.
+    matched_measurements = {
+        event.id: _measurements_for_event(event, measurements)
+        for event in events
+    }
 
     results: list[CorrelationAssessment] = []
     for index, left in enumerate(events):
@@ -403,7 +424,13 @@ def candidate_correlations(
             if (as_utc(left.observed_at) - as_utc(right.observed_at)).total_seconds() > window_hours * 3600:
                 break
             assessment = evaluate_pair(
-                db, left, right, measurements=measurements, event_evidence=evidence, window_hours=window_hours
+                db,
+                left,
+                right,
+                measurements=measurements,
+                matched_measurements=matched_measurements,
+                event_evidence=evidence,
+                window_hours=window_hours,
             )
             if assessment and assessment.strength >= minimum:
                 results.append(assessment)

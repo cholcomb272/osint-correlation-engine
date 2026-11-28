@@ -3,16 +3,17 @@
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
-from app.main import SessionLocal, collect, collect_network_measurements, measurement_poll_minutes, poll_minutes
+from app.main import Event, FEED_SOURCES, SessionLocal, collect, collect_network_measurements, measurement_poll_minutes, poll_minutes
 from app.logging_config import configure_logging
 from app.services.correlation import candidate_correlations, persist_candidates
-from app.v2_models import CollectorCheckpoint, CollectorRun
+from app.services.fusion import run_fusion
+from app.v2_models import CollectorCheckpoint, CollectorRun, SourceCoverageSnapshot
 
 
 logger = logging.getLogger("osint.worker")
@@ -24,6 +25,10 @@ DEDUPLICATED = Counter("osint_deduplicated_records_total", "Deduplicated records
 CORRELATION_DURATION = Histogram("osint_correlation_processing_duration_seconds", "Correlation processing duration")
 CORRELATION_VOLUME = Gauge("osint_correlation_candidate_count", "Current correlation candidate count")
 PROCESSING_BACKLOG = Gauge("osint_processing_backlog", "Queued in-process jobs")
+FUSION_DURATION = Histogram("osint_fusion_processing_duration_seconds", "Knowledge-graph fusion processing duration")
+FUSION_RELATIONSHIPS = Gauge("osint_fusion_relationship_count", "Relationships evaluated in the latest fusion run")
+FUSION_CLUSTERS = Gauge("osint_fusion_cluster_count", "Clusters found in the latest fusion run")
+INVESTIGATION_CANDIDATES = Gauge("osint_investigation_candidate_count", "Investigation candidates in the latest fusion run")
 
 
 def _record_summary(summary: dict, started: datetime, duration: float, prefix: str = "") -> None:
@@ -36,7 +41,7 @@ def _record_summary(summary: dict, started: datetime, duration: float, prefix: s
             inserted = int(values.get("added", 0)) if isinstance(values, dict) else 0
             updated = int(values.get("updated", 0)) if isinstance(values, dict) else 0
             status = "failed" if error else "success"
-            deduplicated = max(0, parsed - inserted)
+            deduplicated = max(0, parsed - inserted - updated)
             db.add(
                 CollectorRun(
                     collector=collector,
@@ -65,6 +70,63 @@ def _record_summary(summary: dict, started: datetime, duration: float, prefix: s
             DEDUPLICATED.labels(collector).inc(deduplicated)
             if not error:
                 SOURCE_FRESHNESS.labels(collector).set(now.timestamp())
+            if prefix == "feed:" and name in FEED_SOURCES:
+                definition = FEED_SOURCES[name]
+                latest_event = db.scalar(
+                    select(func.max(Event.publisher_reported_at)).where(Event.source == name)
+                )
+                freshness = (
+                    max(0.0, (now - latest_event).total_seconds())
+                    if latest_event
+                    else None
+                )
+                gaps = []
+                if error:
+                    gaps.append("latest collection failed")
+                if not parsed:
+                    gaps.append("no eligible records were visible in the requested window")
+                if definition.languages == ["en"]:
+                    gaps.append("source coverage is English-only")
+                if definition.geographic_scope not in (["global"], ["global_technology"]):
+                    gaps.append(
+                        "publisher scope is limited to "
+                        + ", ".join(definition.geographic_scope)
+                    )
+                expected_seconds = (
+                    definition.expected_cadence_minutes * 60
+                    if definition.expected_cadence_minutes
+                    else None
+                )
+                coverage_status = (
+                    "failed"
+                    if error
+                    else "no_recent_items"
+                    if not parsed
+                    else "stale"
+                    if freshness is not None
+                    and expected_seconds is not None
+                    and freshness > expected_seconds * 4
+                    else "healthy"
+                )
+                db.add(
+                    SourceCoverageSnapshot(
+                        source_id=name,
+                        captured_at=now,
+                        domains=definition.domains,
+                        geographic_scope=definition.geographic_scope,
+                        languages=definition.languages,
+                        observed_items=parsed,
+                        expected_cadence_minutes=definition.expected_cadence_minutes,
+                        freshness_seconds=freshness,
+                        completeness=None,
+                        status=coverage_status,
+                        gaps=gaps,
+                        notes=[
+                            "Completeness is not estimated without a trustworthy source denominator.",
+                            "A healthy collector does not imply comprehensive event coverage.",
+                        ],
+                    )
+                )
         db.commit()
 
 
@@ -107,6 +169,24 @@ def run_correlations(days: int = 30) -> int:
         CORRELATION_DURATION.observe(time.perf_counter() - clock)
 
 
+def run_intelligence_fusion(days: int = 90) -> dict:
+    clock = time.perf_counter()
+    PROCESSING_BACKLOG.inc()
+    try:
+        with SessionLocal() as db:
+            result = run_fusion(db, days=days)
+            FUSION_RELATIONSHIPS.set(result["relationships"]["relationships_evaluated"])
+            FUSION_CLUSTERS.set(result["clusters"]["clusters"])
+            INVESTIGATION_CANDIDATES.set(result["clusters"]["investigation_candidates"])
+            return result
+    except Exception as exc:
+        logger.exception("intelligence fusion rebuild failed")
+        return {"error": str(exc)[:250]}
+    finally:
+        PROCESSING_BACKLOG.dec()
+        FUSION_DURATION.observe(time.perf_counter() - clock)
+
+
 def apply_retention() -> dict[str, int]:
     """Prune operational metadata only; source events and evidence are retained."""
     from datetime import timedelta
@@ -132,6 +212,15 @@ def main() -> None:
     scheduler.add_job(run_feeds, "interval", minutes=poll_minutes(), id="feeds", max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc))
     scheduler.add_job(run_measurements, "interval", minutes=measurement_poll_minutes(), id="measurements", max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc))
     scheduler.add_job(run_correlations, "interval", minutes=max(5, poll_minutes()), id="correlations", max_instances=1, coalesce=True)
+    scheduler.add_job(
+        run_intelligence_fusion,
+        "interval",
+        minutes=max(15, poll_minutes()),
+        id="intelligence_fusion",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+    )
     if os.getenv("RETENTION_ENABLED", "false").casefold() == "true":
         scheduler.add_job(apply_retention, "cron", hour=3, minute=17, id="retention", max_instances=1, coalesce=True)
     logger.info("worker starting with feed interval=%sm measurement interval=%sm", poll_minutes(), measurement_poll_minutes())

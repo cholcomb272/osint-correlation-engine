@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.main import (
     Event,
+    FEED_SOURCES,
     NetworkMeasurement,
     as_utc,
     authorize,
@@ -24,6 +25,8 @@ from app.main import (
 )
 from app.services.analytics import historical_trends
 from app.services.correlation import candidate_correlations, persist_candidates
+from app.services.fusion import run_fusion
+from app.services.knowledge_graph import knowledge_graph
 from app.services.topology import topology
 from app.v2_models import (
     AuditLog,
@@ -38,6 +41,16 @@ from app.v2_models import (
     InvestigationEvent,
     InvestigationEvidence,
     InvestigationNote,
+    EventClassification,
+    EventFieldAssessment,
+    EventCluster,
+    ClusterEvent,
+    IntelligenceEntity,
+    IntelligenceRequirement,
+    InvestigationCandidate,
+    KnowledgeRelationship,
+    RelationshipRevision,
+    SourceCoverageSnapshot,
 )
 
 
@@ -159,6 +172,43 @@ class EvidenceLinkIn(BaseModel):
     role: str = Field(default="supports", pattern="^(supports|contradicts|context)$")
 
 
+class IntelligenceScope(BaseModel):
+    domains: list[str] = Field(default_factory=list, max_length=50)
+    regions: list[str] = Field(default_factory=list, max_length=100)
+    countries: list[str] = Field(default_factory=list, max_length=100)
+    organizations: list[str] = Field(default_factory=list, max_length=100)
+    entity_ids: list[str] = Field(default_factory=list, max_length=200)
+    event_types: list[str] = Field(default_factory=list, max_length=100)
+    relationship_types: list[str] = Field(default_factory=list, max_length=100)
+
+
+class TriggerPolicy(BaseModel):
+    minimum_significance: str = Field(default="moderate", pattern="^(unknown|low|moderate|high|critical)$")
+    minimum_relevance: float = Field(default=0.6, ge=0, le=1)
+    minimum_independent_sources: int = Field(default=1, ge=1, le=20)
+    require_cross_domain: bool = False
+    anomaly_score_threshold: float | None = Field(default=None, ge=0, le=100)
+    create_investigation_candidate: bool = True
+
+
+class RequirementIn(BaseModel):
+    name: str = Field(min_length=3, max_length=200)
+    description: str = Field(default="", max_length=10000)
+    active: bool = True
+    priority: str = Field(default="normal", pattern="^(low|normal|high|critical)$")
+    scope: IntelligenceScope = Field(default_factory=IntelligenceScope)
+    trigger_policy: TriggerPolicy = Field(default_factory=TriggerPolicy)
+    created_by: str = Field(default="admin", max_length=100)
+
+
+class RequirementUpdate(BaseModel):
+    description: str | None = Field(default=None, max_length=10000)
+    active: bool | None = None
+    priority: str | None = Field(default=None, pattern="^(low|normal|high|critical)$")
+    scope: IntelligenceScope | None = None
+    trigger_policy: TriggerPolicy | None = None
+
+
 def _audit(db: Session, request: Request, action: str, object_type: str, object_id: str | int | None = None, **details) -> None:
     remote = request.client.host if request.client else "unknown"
     salt = os.getenv("AUDIT_HASH_SALT", os.getenv("API_TOKEN", "local-audit"))
@@ -193,11 +243,20 @@ def event_payload(event: Event, now: datetime | None = None) -> dict:
         "scheduled_end_at": as_utc(event.scheduled_end_at).isoformat() if event.scheduled_end_at else None,
         "resolved_at": as_utc(event.resolved_at).isoformat() if event.resolved_at else None,
         "category": event.category,
+        "domain": event.domain,
+        "event_type": event.event_type,
+        "significance": event.significance,
         "provider": event.provider,
         "asn": event.asn,
         "region": event.region,
         "service": event.service,
         "datacenter": event.datacenter,
+        "latitude": event.latitude,
+        "longitude": event.longitude,
+        "location_name": event.location_name,
+        "language": event.language,
+        "extraction_confidence": event.extraction_confidence,
+        "ontology_version": event.ontology_version,
         "severity": event.severity,
         "cause_classification": event.cause_classification,
         "investigation_status": event.investigation_status,
@@ -227,6 +286,10 @@ def public_incidents(
     region: str | None = Query(default=None, max_length=100),
     category: str | None = Query(default=None, max_length=60),
     severity: str | None = Query(default=None, max_length=30),
+    domain: str | None = Query(default=None, max_length=60),
+    event_type: str | None = Query(default=None, max_length=100),
+    significance: str | None = Query(default=None, max_length=30),
+    q: str | None = Query(default=None, min_length=2, max_length=200),
     include_scheduled: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -242,6 +305,14 @@ def public_incidents(
         conditions.append(Event.category == category)
     if severity:
         conditions.append(Event.severity == severity)
+    if domain:
+        conditions.append(Event.domain == domain)
+    if event_type:
+        conditions.append(Event.event_type == event_type)
+    if significance:
+        conditions.append(Event.significance == significance)
+    if q:
+        conditions.append(func.lower(Event.title).contains(q.casefold()))
     total = db.scalar(select(func.count()).select_from(Event).where(*conditions)) or 0
     records = db.scalars(
         select(Event).where(*conditions).order_by(Event.observed_at.desc()).offset((page - 1) * page_size).limit(page_size)
@@ -361,7 +432,7 @@ def public_source_health(db: Session = Depends(get_db)):
 def public_overview(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     recent = now - timedelta(days=30)
-    active = db.scalar(select(func.count()).select_from(Event).where(Event.observed_at.between(recent, now), Event.category == "service_incident")) or 0
+    active = db.scalar(select(func.count()).select_from(Event).where(Event.observed_at.between(recent, now), Event.category.not_in(["scheduled_maintenance", "policy_announcement", "security_advisory"]))) or 0
     anomalies = db.scalar(select(func.count()).select_from(NetworkMeasurement).where(NetworkMeasurement.observed_at.between(recent, now), or_(func.abs(NetworkMeasurement.z_score) >= 2, NetworkMeasurement.source == "ioda"))) or 0
     candidates = candidate_correlations(db, days=30, limit=500)
     return {
@@ -369,9 +440,327 @@ def public_overview(db: Session = Depends(get_db)):
         "recent_anomalies": anomalies,
         "correlation_candidates": len(candidates),
         "high_confidence_relationships": sum(item.confidence_assessment == "high" for item in candidates),
+        "cross_domain_clusters": db.scalar(select(func.count()).select_from(EventCluster).where(EventCluster.status == "candidate", EventCluster.cluster_type == "cross_domain")) or 0,
+        "investigation_candidates": db.scalar(select(func.count()).select_from(InvestigationCandidate).where(InvestigationCandidate.status == "new")) or 0,
         "generated_at": now.isoformat(),
         "disclaimer": "Candidates show evidence relationships, not attack attribution.",
     }
+
+
+@router.get("/api/public/events/{event_id}/intelligence")
+def public_event_intelligence(event_id: int, db: Session = Depends(get_db)):
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(404, "event not found")
+    classifications = db.scalars(
+        select(EventClassification)
+        .where(EventClassification.event_id == event_id)
+        .order_by(EventClassification.scheme, EventClassification.assessed_at.desc())
+    ).all()
+    current_classifications = {}
+    for item in classifications:
+        current_classifications.setdefault(
+            item.scheme,
+            {
+                "label": item.label,
+                "parent_label": item.parent_label,
+                "knowledge_status": item.knowledge_status,
+                "confidence": item.confidence,
+                "rationale": item.rationale,
+                "evidence_ids": item.evidence_ids,
+                "assessed_at": as_utc(item.assessed_at).isoformat(),
+            },
+        )
+    assessments = db.scalars(
+        select(EventFieldAssessment)
+        .where(EventFieldAssessment.event_id == event_id)
+        .order_by(EventFieldAssessment.field_name, EventFieldAssessment.assessed_at.desc())
+    ).all()
+    current_fields = {}
+    for item in assessments:
+        current_fields.setdefault(
+            item.field_name,
+            {
+                "value": item.value,
+                "knowledge_status": item.knowledge_status,
+                "confidence": item.confidence,
+                "rationale": item.rationale,
+                "plausible_explanations": item.plausible_explanations,
+                "evidence_to_strengthen": item.evidence_to_strengthen,
+                "evidence_to_weaken": item.evidence_to_weaken,
+                "collection_actions": item.collection_actions,
+                "evidence_ids": item.evidence_ids,
+                "assessed_at": as_utc(item.assessed_at).isoformat(),
+            },
+        )
+    evidence = db.execute(
+        select(EvidenceArtifact)
+        .join(EventEvidence, EventEvidence.evidence_id == EvidenceArtifact.id)
+        .where(EventEvidence.event_id == event_id)
+        .order_by(EvidenceArtifact.published_at)
+    ).scalars().all()
+    graph = knowledge_graph(db, days=3650, focus=f"event:{event_id}", include_contextual=True, page_size=200)
+    return {
+        "event": event_payload(event),
+        "classifications": current_classifications,
+        "field_assessments": current_fields,
+        "unresolved_fields": [
+            name for name, value in current_fields.items()
+            if value["knowledge_status"] in {"unresolved", "reported_only"}
+        ],
+        "evidence": [
+            {
+                "id": item.id,
+                "stable_id": item.stable_id,
+                "original_url": item.original_url,
+                "publisher": item.publisher,
+                "upstream_source": item.upstream_source,
+                "published_at": as_utc(item.published_at).isoformat() if item.published_at else None,
+                "observed_at": as_utc(item.observed_at).isoformat() if item.observed_at else None,
+                "verification_status": item.verification_status,
+                "reliability": item.reliability,
+                "is_primary_source": item.is_primary_source,
+                "collection_method": item.collection_method,
+            }
+            for item in evidence
+        ],
+        "relationships": graph["edges"],
+        "semantics": "Unresolved fields preserve uncertainty; relevance does not imply causation or attribution.",
+    }
+
+
+@router.get("/api/public/entities")
+def public_entities(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    entity_type: str | None = Query(default=None, max_length=60),
+    q: str | None = Query(default=None, min_length=2, max_length=200),
+    db: Session = Depends(get_db),
+):
+    conditions = []
+    if entity_type:
+        conditions.append(IntelligenceEntity.entity_type == entity_type)
+    if q:
+        conditions.append(func.lower(IntelligenceEntity.canonical_name).contains(q.casefold()))
+    total = db.scalar(select(func.count()).select_from(IntelligenceEntity).where(*conditions)) or 0
+    records = db.scalars(
+        select(IntelligenceEntity)
+        .where(*conditions)
+        .order_by(IntelligenceEntity.last_seen_at.desc(), IntelligenceEntity.canonical_name)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "items": [
+            {
+                "stable_id": item.stable_id,
+                "entity_type": item.entity_type,
+                "canonical_name": item.canonical_name,
+                "country_code": item.country_code,
+                "region": item.region,
+                "latitude": item.latitude,
+                "longitude": item.longitude,
+                "attributes": item.attributes,
+                "first_seen_at": as_utc(item.first_seen_at).isoformat() if item.first_seen_at else None,
+                "last_seen_at": as_utc(item.last_seen_at).isoformat() if item.last_seen_at else None,
+            }
+            for item in records
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+@router.get("/api/public/entities/{stable_id}")
+def public_entity(stable_id: str, db: Session = Depends(get_db)):
+    entity = db.scalar(select(IntelligenceEntity).where(IntelligenceEntity.stable_id == stable_id))
+    if entity is None:
+        raise HTTPException(404, "entity not found")
+    graph = knowledge_graph(db, days=3650, focus=f"entity:{stable_id}", include_contextual=True, page_size=200)
+    node = next((item for item in graph["nodes"] if item["id"] == f"entity:{stable_id}"), None)
+    return {"entity": node, "relationships": graph["edges"], "neighbors": [item for item in graph["nodes"] if item["id"] != f"entity:{stable_id}"]}
+
+
+@router.get("/api/public/knowledge-graph")
+def public_knowledge_graph(
+    days: int = Query(30, ge=1, le=3650),
+    domain: str | None = Query(default=None, max_length=60),
+    entity_type: str | None = Query(default=None, max_length=60),
+    predicate: list[str] | None = Query(default=None),
+    semantic_tier: list[str] | None = Query(default=None),
+    minimum_relevance: float = Query(0, ge=0, le=1),
+    include_contextual: bool = False,
+    focus: str | None = Query(default=None, max_length=120),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    return knowledge_graph(
+        db,
+        days=days,
+        domain=domain,
+        entity_type=entity_type,
+        predicates=predicate,
+        semantic_tiers=semantic_tier,
+        minimum_relevance=minimum_relevance,
+        include_contextual=include_contextual,
+        focus=focus,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/api/public/map")
+def public_map(
+    days: int = Query(30, ge=1, le=3650),
+    domain: str | None = Query(default=None, max_length=60),
+    minimum_significance: str = Query("low", pattern="^(unknown|low|moderate|high|critical)$"),
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    ranks = {"unknown": 0, "low": 1, "moderate": 2, "high": 3, "critical": 4}
+    allowed = [value for value, rank in ranks.items() if rank >= ranks[minimum_significance]]
+    conditions = [
+        Event.observed_at >= datetime.now(timezone.utc) - timedelta(days=days),
+        Event.observed_at <= datetime.now(timezone.utc),
+        Event.latitude.is_not(None),
+        Event.longitude.is_not(None),
+        Event.significance.in_(allowed),
+    ]
+    if domain:
+        conditions.append(Event.domain == domain)
+    records = db.scalars(select(Event).where(*conditions).order_by(Event.observed_at.desc()).limit(limit)).all()
+    return {
+        "items": [event_payload(item) for item in records],
+        "total_returned": len(records),
+        "coverage_warning": "Only events with source-provided or explicitly resolved coordinates appear on the map.",
+    }
+
+
+@router.get("/api/public/clusters")
+def public_clusters(
+    days: int = Query(30, ge=1, le=3650),
+    status_value: str = Query("candidate", alias="status", max_length=30),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    clusters = db.scalars(
+        select(EventCluster)
+        .where(EventCluster.status == status_value, EventCluster.window_end >= cutoff)
+        .order_by(EventCluster.window_end.desc())
+        .limit(limit)
+    ).all()
+    output = []
+    for cluster in clusters:
+        event_ids = db.scalars(select(ClusterEvent.event_id).where(ClusterEvent.cluster_id == cluster.id)).all()
+        output.append(
+            {
+                "stable_id": cluster.stable_id,
+                "title": cluster.title,
+                "cluster_type": cluster.cluster_type,
+                "status": cluster.status,
+                "significance": cluster.significance,
+                "anomaly_score": cluster.anomaly_score,
+                "explanation": cluster.explanation,
+                "dimensions": cluster.dimensions,
+                "window_start": as_utc(cluster.window_start).isoformat(),
+                "window_end": as_utc(cluster.window_end).isoformat(),
+                "event_ids": list(event_ids),
+                "event_count": len(event_ids),
+            }
+        )
+    return {"items": output, "semantics": "Cluster membership indicates evidence-connected relevance, not common cause or coordination."}
+
+
+@router.get("/api/public/investigation-candidates")
+def public_investigation_candidates(
+    status_value: str = Query("new", alias="status", max_length=30),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    records = db.scalars(
+        select(InvestigationCandidate)
+        .where(InvestigationCandidate.status == status_value)
+        .order_by(InvestigationCandidate.created_at.desc())
+        .limit(limit)
+    ).all()
+    return {
+        "items": [
+            {
+                "stable_id": item.stable_id,
+                "cluster_id": item.cluster_id,
+                "title": item.title,
+                "priority": item.priority,
+                "status": item.status,
+                "trigger_type": item.trigger_type,
+                "rationale": item.rationale,
+                "known_facts": item.known_facts,
+                "competing_explanations": item.competing_explanations,
+                "unresolved_questions": item.unresolved_questions,
+                "collection_priorities": item.collection_priorities,
+                "created_at": as_utc(item.created_at).isoformat(),
+                "last_reassessed_at": as_utc(item.last_reassessed_at).isoformat(),
+            }
+            for item in records
+        ]
+    }
+
+
+@router.get("/api/public/coverage")
+def public_coverage(db: Session = Depends(get_db)):
+    snapshots = db.scalars(
+        select(SourceCoverageSnapshot).order_by(
+            SourceCoverageSnapshot.source_id,
+            SourceCoverageSnapshot.captured_at.desc(),
+        )
+    ).all()
+    latest = {}
+    for item in snapshots:
+        latest.setdefault(item.source_id, item)
+    items = []
+    for source_id, definition in FEED_SOURCES.items():
+        item = latest.get(source_id)
+        items.append(
+            {
+                "source_id": source_id,
+                "name": definition.name,
+                "domains": definition.domains,
+                "geographic_scope": definition.geographic_scope,
+                "languages": definition.languages,
+                "source_role": definition.source_role,
+                "adapter": definition.adapter,
+                "expected_cadence_minutes": definition.expected_cadence_minutes,
+                "status": item.status if item else "not_yet_measured",
+                "captured_at": as_utc(item.captured_at).isoformat() if item else None,
+                "observed_items": item.observed_items if item else 0,
+                "freshness_seconds": item.freshness_seconds if item else None,
+                "completeness": item.completeness if item else None,
+                "gaps": item.gaps if item else ["No coverage snapshot has been recorded since this source was configured."],
+                "notes": item.notes if item else ["Configured source availability is not comprehensive domain coverage."],
+            }
+        )
+    configured_domains = sorted({domain for definition in FEED_SOURCES.values() for domain in definition.domains})
+    return {
+        "items": items,
+        "configured_domains": configured_domains,
+        "known_global_gaps": [
+            "No comprehensive global aviation, maritime, rail, energy, water, healthcare, or payments telemetry connector is configured.",
+            "Most reporting and advisory sources are English-language.",
+            "Source health measures collection, not real-world completeness.",
+        ],
+    }
+
+
+@router.get("/api/public/intelligence-requirements")
+def public_requirements(db: Session = Depends(get_db)):
+    records = db.scalars(
+        select(IntelligenceRequirement)
+        .where(IntelligenceRequirement.active.is_(True))
+        .order_by(IntelligenceRequirement.priority.desc(), IntelligenceRequirement.name)
+    ).all()
+    return {"items": [{"id": item.id, "name": item.name, "description": item.description, "priority": item.priority, "scope": item.scope, "trigger_policy": item.trigger_policy} for item in records]}
 
 
 def investigation_payload(db: Session, record: Investigation, include_private: bool = False) -> dict:
@@ -494,6 +883,93 @@ def rebuild_correlations(request: Request, days: int = Query(30, ge=1, le=3650),
     persisted = persist_candidates(db, assessments)
     _audit(db, request, "correlations.rebuild", "correlation", details_count=persisted)
     return {"candidate_pairs": len(assessments), "relationship_records": persisted}
+
+
+@router.post("/api/admin/fusion/rebuild", dependencies=[Depends(authorize)])
+def rebuild_fusion(
+    request: Request,
+    days: int = Query(90, ge=1, le=3650),
+    db: Session = Depends(get_db),
+):
+    result = run_fusion(db, days=days)
+    _audit(
+        db,
+        request,
+        "fusion.rebuild",
+        "knowledge_graph",
+        days=days,
+        relationships=result["relationships"]["relationships_evaluated"],
+        clusters=result["clusters"]["clusters"],
+    )
+    return result
+
+
+@router.post("/api/admin/intelligence-requirements", dependencies=[Depends(authorize)], status_code=201)
+def create_requirement(payload: RequirementIn, request: Request, db: Session = Depends(get_db)):
+    existing = db.scalar(
+        select(IntelligenceRequirement).where(
+            func.lower(IntelligenceRequirement.name) == payload.name.casefold()
+        )
+    )
+    if existing:
+        raise HTTPException(409, "an intelligence requirement with this name already exists")
+    record = IntelligenceRequirement(
+        name=payload.name,
+        description=payload.description,
+        active=payload.active,
+        priority=payload.priority,
+        scope=payload.scope.model_dump(),
+        trigger_policy=payload.trigger_policy.model_dump(),
+        created_by=payload.created_by,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    _audit(db, request, "intelligence_requirement.create", "intelligence_requirement", record.id)
+    return {
+        "id": record.id,
+        "name": record.name,
+        "active": record.active,
+        "priority": record.priority,
+        "scope": record.scope,
+        "trigger_policy": record.trigger_policy,
+    }
+
+
+@router.patch("/api/admin/intelligence-requirements/{requirement_id}", dependencies=[Depends(authorize)])
+def update_requirement(
+    requirement_id: int,
+    payload: RequirementUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    record = db.get(IntelligenceRequirement, requirement_id)
+    if record is None:
+        raise HTTPException(404, "intelligence requirement not found")
+    values = payload.model_dump(exclude_unset=True)
+    if "scope" in values and payload.scope is not None:
+        values["scope"] = payload.scope.model_dump()
+    if "trigger_policy" in values and payload.trigger_policy is not None:
+        values["trigger_policy"] = payload.trigger_policy.model_dump()
+    for key, value in values.items():
+        setattr(record, key, value)
+    db.commit()
+    _audit(
+        db,
+        request,
+        "intelligence_requirement.update",
+        "intelligence_requirement",
+        record.id,
+        fields=sorted(values),
+    )
+    return {
+        "id": record.id,
+        "name": record.name,
+        "active": record.active,
+        "priority": record.priority,
+        "scope": record.scope,
+        "trigger_policy": record.trigger_policy,
+    }
 
 
 @router.post("/api/admin/collect", dependencies=[Depends(authorize)])

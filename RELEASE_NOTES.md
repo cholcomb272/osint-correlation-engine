@@ -1,5 +1,33 @@
 # Release notes
 
+## Unreleased — global intelligence fusion foundation
+
+### Added
+
+- Additive ontology migration for entities, aliases, multi-label classifications,
+  field-level uncertainty, evidence-bearing knowledge relationships, clusters,
+  autonomous investigation candidates, intelligence requirements, and coverage snapshots.
+- Modular structured collectors for USGS, GDACS, NASA EONET, NOAA SWPC, and
+  CISA KEV, preserving distinct occurrence, publication, observation, and collection times.
+- Persistent fusion pipeline with entity resolution, relationship-specific time
+  windows, lineage-aware evidence semantics, cross-domain clusters, competing
+  explanations, and automatic reassessment.
+- Credential-free global map, multidomain timeline, knowledge graph, event
+  intelligence inspector, investigation-candidate feed, and coverage-gap views.
+- Public map, entity, event-intelligence, knowledge-graph, cluster, candidate,
+  coverage, and intelligence-requirement APIs plus authenticated fusion controls.
+
+### Validation and limits
+
+- Existing PostgreSQL data is preserved through migration `20261128_0002`.
+- Correlation matching now caches event-specific telemetry and bounds topology
+  evaluation to the requested page/neighborhood, avoiding all-history pair work.
+- The bundled registry is not comprehensive global coverage. It still lacks
+  broad aviation, maritime, rail, energy, water, healthcare, payments, DNS,
+  satellite, and multilingual reporting sources.
+- Cluster membership means evidence-connected investigative relevance, not a
+  shared cause, coordination, malicious activity, or attribution.
+
 ## 0.2.0-alpha.2 — 2026-11-20
 
 ### Intelligence coverage and validation

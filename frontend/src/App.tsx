@@ -1,20 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type ElementDefinition, type LayoutOptions } from 'cytoscape'
+import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
 import {
   Activity, AlertTriangle, BarChart3, Clock3, Database, ExternalLink,
-  FileSearch, Fullscreen, GitBranch, HeartPulse, Network, Search, ShieldCheck,
+  FileSearch, Fullscreen, GitBranch, Globe2, HeartPulse, Layers3, Network,
+  Radar, Search, ShieldCheck,
 } from 'lucide-react'
 import { api } from './api'
-import type { Correlation, EvidenceSummary, GraphElement, GraphResponse, Incident, TelemetryCoverage } from './types'
+import type {
+  Correlation, EvidenceSummary, EventIntelligenceResponse, GraphElement, GraphResponse, Incident,
+  IntelligenceCluster, InvestigationCandidate, KnowledgeGraphResponse, TelemetryCoverage,
+} from './types'
 
 const sections = [
   ['overview', 'Overview', Activity],
-  ['timeline', 'Incident Timeline', Clock3],
+  ['situation', 'Global Situation', Globe2],
+  ['timeline', 'Intelligence Timeline', Clock3],
+  ['knowledge', 'Intelligence Graph', Layers3],
   ['topology', 'Infrastructure Topology', Network],
   ['correlations', 'Correlation Explorer', GitBranch],
   ['investigations', 'Investigation Workspace', FileSearch],
   ['analytics', 'Historical Analytics', BarChart3],
-  ['health', 'Source Health', HeartPulse],
+  ['health', 'Coverage & Health', HeartPulse],
   ['admin', 'Administrative Operations', ShieldCheck],
 ] as const
 
@@ -46,6 +54,8 @@ function Overview({ onNavigate }: { onNavigate: (section: string) => void }) {
     ['Recent anomalies', 'recent_anomalies', 'topology'],
     ['Correlation candidates', 'correlation_candidates', 'correlations'],
     ['High-confidence relationships', 'high_confidence_relationships', 'correlations'],
+    ['Cross-domain clusters', 'cross_domain_clusters', 'situation'],
+    ['Investigation candidates', 'investigation_candidates', 'investigations'],
   ]
   return <>
     <header className="section-heading"><div><span className="eyebrow">CURRENT EVIDENCE PICTURE</span><h1>Infrastructure intelligence overview</h1></div>{data && <span className="asof">As of {date(String(data.generated_at))}</span>}</header>
@@ -61,7 +71,7 @@ function RecentActivity() {
   const { data, error } = useLoad(() => api.incidents(7))
   if (!data) return <Status error={error} />
   return <div className="panel"><div className="panel-title"><h2>Recent activity</h2><span>{data.total} source records</span></div><div className="activity-list">
-    {data.items.slice(0, 8).map(item => <article key={item.id}><span className={`source-dot ${item.category}`} /><time>{date(item.observed_at)}</time><div><strong>{item.title}</strong><small>{item.source} · {item.provider || 'provider not normalized'} · {item.region || 'region not normalized'}</small></div></article>)}
+    {data.items.slice(0, 8).map(item => <article key={item.id}><span className={`source-dot ${item.category}`} /><time>{date(item.observed_at)}</time><div><strong>{item.title}</strong><small>{item.domain?.replaceAll('_', ' ')} · {item.event_type?.replaceAll('_', ' ')} · {item.location_name || item.region || item.provider || 'affected entity unresolved'}</small></div></article>)}
   </div></div>
 }
 
@@ -70,10 +80,114 @@ function Timeline({ onFocus }: { onFocus: (id: string) => void }) {
   const [query, setQuery] = useState('')
   const { data, error } = useLoad(() => api.incidents(days), [days])
   const items = data?.items.filter(item => `${item.title} ${item.provider} ${item.region}`.toLowerCase().includes(query.toLowerCase())) || []
-  return <><header className="section-heading"><div><span className="eyebrow">SOURCE-REPORTED EVENTS</span><h1>Incident timeline</h1></div></header>
+  const [selected, setSelected] = useState<number | null>(null)
+  return <><header className="section-heading"><div><span className="eyebrow">MULTIDOMAIN SOURCE RECORDS</span><h1>Unified intelligence timeline</h1></div></header>
     <div className="toolbar"><label><Search size={15} /><input aria-label="Search incidents" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search provider, region, title" /></label><label>Window<select value={days} onChange={event => setDays(Number(event.target.value))}><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option><option value={365}>1 year</option></select></label></div>
-    {!data ? <Status error={error} /> : items.length === 0 ? <Status empty /> : <div className="timeline">{items.map(item => <button key={item.id} onClick={() => onFocus(item.stable_id)}><time>{date(item.observed_at)}</time><span className="timeline-marker" /><div><span className="badges"><i>{item.category.replaceAll('_', ' ')}</i><i>{item.severity}</i></span><strong>{item.title}</strong><small>{item.provider || 'Unknown provider'} · {item.region || 'Unknown region'} · confidence {pct(item.evidence_confidence)}</small></div></button>)}</div>}
+    {!data ? <Status error={error} /> : items.length === 0 ? <Status empty /> : <div className="timeline">{items.map(item => <button key={item.id} onClick={() => setSelected(item.id)}><time>{date(item.occurrence_at || item.observed_at)}</time><span className="timeline-marker" /><div><span className="badges"><i>{item.domain.replaceAll('_', ' ')}</i><i>{item.event_type.replaceAll('_', ' ')}</i><i>{item.significance}</i></span><strong>{item.title}</strong><small>{item.location_name || item.region || item.provider || 'Affected entity unresolved'} · evidence confidence {pct(item.evidence_confidence)}</small></div></button>)}</div>}
+    {selected && <EventIntelligence eventId={selected} onTopology={() => onFocus(`incident:${selected}`)} onClose={() => setSelected(null)} />}
   </>
+}
+
+function EventIntelligence({ eventId, onTopology, onClose }: { eventId: number; onTopology: () => void; onClose: () => void }) {
+  const { data, error } = useLoad(() => api.eventIntelligence(eventId), [eventId])
+  return <div className="drawer-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}><aside className="event-drawer" role="dialog" aria-modal="true" aria-label="Event intelligence">
+    <div className="drawer-header"><div><span className="eyebrow">EVENT INTELLIGENCE</span><h2>{data?.event.title || 'Loading event…'}</h2></div><button className="secondary" onClick={onClose}>Close</button></div>
+    {!data ? <Status error={error} /> : <EventIntelligenceDetails data={data} onTopology={onTopology} />}
+  </aside></div>
+}
+
+function EventIntelligenceDetails({ data, onTopology }: { data: EventIntelligenceResponse; onTopology: () => void }) {
+  return <>
+    <div className="notice"><ShieldCheck size={20} /><div><strong>Analytical boundary</strong><p>{data.semantics}</p></div></div>
+    <div className="drawer-actions"><button className="secondary" onClick={onTopology}><Network size={14} /> Open evidence neighborhood</button><a className="secondary" href={data.event.url} target="_blank" rel="noreferrer">Original source <ExternalLink size={14} /></a></div>
+    <section className="intelligence-section"><h3>What is known</h3><div className="classification-grid">{Object.entries(data.classifications).map(([scheme, item]) => <article key={scheme}><span>{scheme.replaceAll('_', ' ')}</span><strong>{item.label.replaceAll('_', ' ')}</strong><small>{item.knowledge_status.replaceAll('_', ' ')} · confidence {pct(item.confidence)}</small><p>{item.rationale}</p></article>)}</div></section>
+    <section className="intelligence-section"><h3>Field-level uncertainty</h3>{Object.entries(data.field_assessments).map(([field, item]) => <details key={field} open={data.unresolved_fields.includes(field)}><summary><span>{field.replaceAll('_', ' ')}</span><i className={`knowledge-status ${item.knowledge_status}`}>{item.knowledge_status.replaceAll('_', ' ')}</i></summary><p>{item.rationale}</p>{item.value && <dl><dt>Current value</dt><dd>{item.value}</dd></dl>}{item.plausible_explanations.length > 0 && <p><strong>Plausible explanations:</strong> {item.plausible_explanations.join('; ')}</p>}{item.evidence_to_strengthen.length > 0 && <p><strong>Would strengthen:</strong> {item.evidence_to_strengthen.join('; ')}</p>}{item.collection_actions.length > 0 && <p><strong>Collection actions:</strong> {item.collection_actions.join('; ')}</p>}</details>)}</section>
+    <section className="intelligence-section"><h3>Evidence lineage</h3><div className="evidence-list">{data.evidence.map(item => <a key={item.id} href={item.original_url} target="_blank" rel="noreferrer"><strong>{item.publisher}</strong><span>{item.collection_method} · {item.is_primary_source ? 'primary source' : 'third-party report'} · {item.verification_status}</span><small>{date(item.published_at || item.observed_at)}</small></a>)}</div></section>
+  </>
+}
+
+const significanceColors: Record<string, string> = { critical: '#e86274', high: '#e88d55', moderate: '#e3a84f', low: '#4fc4df', unknown: '#82929e' }
+
+function GlobalSituation({ onEvent }: { onEvent: (id: number) => void }) {
+  const [days, setDays] = useState(30)
+  const [domain, setDomain] = useState('')
+  const [minimum, setMinimum] = useState('low')
+  const { data, error } = useLoad(() => api.map(days, domain, minimum), [days, domain, minimum])
+  const { data: clusters } = useLoad(api.clusters)
+  const domains = ['cybersecurity', 'internet_telecommunications', 'critical_infrastructure', 'transportation_logistics', 'geopolitical_strategic', 'environmental_natural']
+  return <><header className="section-heading"><div><span className="eyebrow">GLOBAL SITUATIONAL AWARENESS</span><h1>Evidence-backed event map</h1></div></header>
+    <div className="toolbar"><label>Window<select value={days} onChange={event => setDays(Number(event.target.value))}><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option><option value={365}>1 year</option></select></label><label>Domain<select value={domain} onChange={event => setDomain(event.target.value)}><option value="">All configured domains</option>{domains.map(value => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label><label>Minimum significance<select value={minimum} onChange={event => setMinimum(event.target.value)}><option>unknown</option><option>low</option><option>moderate</option><option>high</option><option>critical</option></select></label></div>
+    <div className="situation-grid"><section className="map-panel">{!data && <Status error={error} />}<MapContainer center={[20, 0]} zoom={2} minZoom={2} maxZoom={10} scrollWheelZoom className="world-map"><TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />{data?.items.map(item => <CircleMarker key={item.id} center={[Number(item.latitude), Number(item.longitude)]} radius={item.significance === 'critical' ? 10 : item.significance === 'high' ? 8 : 6} pathOptions={{ color: significanceColors[item.significance] || significanceColors.unknown, fillOpacity: .72, weight: 2 }} eventHandlers={{ click: () => onEvent(item.id) }}><Popup><strong>{item.title}</strong><br />{item.domain.replaceAll('_', ' ')} · {item.event_type.replaceAll('_', ' ')}<br /><button className="map-link" onClick={() => onEvent(item.id)}>Inspect evidence</button></Popup></CircleMarker>)}</MapContainer><p>{data?.coverage_warning || 'Loading coordinate coverage…'}</p></section><section className="cluster-feed"><div className="panel-title"><h2>Cross-domain clusters</h2><span>Relevance, not common cause</span></div>{clusters?.items.length ? clusters.items.map(item => <ClusterCard key={item.stable_id} item={item} />) : <Status empty />}</section></div>
+  </>
+}
+
+function ClusterCard({ item }: { item: IntelligenceCluster }) {
+  return <article><span className="badges"><i>{item.cluster_type.replaceAll('_', ' ')}</i><i>{item.significance}</i></span><h3>{item.title}</h3><p>{item.explanation}</p><small>{item.event_count} events · {date(item.window_start)} to {date(item.window_end)}</small></article>
+}
+
+function IntelligenceGraph({ initialFocus }: { initialFocus: string }) {
+  const host = useRef<HTMLDivElement>(null)
+  const graph = useRef<Core | null>(null)
+  const [days, setDays] = useState(30)
+  const [domain, setDomain] = useState('')
+  const [entityType, setEntityType] = useState('')
+  const [includeContext, setIncludeContext] = useState(false)
+  const [focus, setFocus] = useState(initialFocus)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
+  const query = useMemo(() => {
+    const params = new URLSearchParams({ days: String(days), page_size: '300', include_contextual: String(includeContext) })
+    if (domain) params.set('domain', domain)
+    if (entityType) params.set('entity_type', entityType)
+    if (focus) params.set('focus', focus.replace(/^incident:/, 'event:'))
+    return params
+  }, [days, domain, entityType, includeContext, focus])
+  const { data, error } = useLoad(() => api.knowledgeGraph(query), [query.toString()])
+
+  useEffect(() => setFocus(initialFocus), [initialFocus])
+  useEffect(() => {
+    if (!host.current || !data) return
+    graph.current?.destroy()
+    const elements: ElementDefinition[] = [
+      ...data.nodes.map(node => ({ data: { ...node, display_label: node.label } })),
+      ...data.edges.map(edge => ({ data: { ...edge, relationship_type: edge.predicate, visual_label: edge.predicate.replaceAll('_', ' ') } })),
+    ]
+    const cy = cytoscape({ container: host.current, elements, minZoom: .15, maxZoom: 4, hideEdgesOnViewport: true, textureOnViewport: true, style: [
+      { selector: 'node', style: { label: 'data(display_label)', color: '#dce8ef', 'background-color': '#4fc4df', 'font-size': 9, 'text-wrap': 'wrap', 'text-max-width': '110px', 'text-valign': 'bottom', 'text-margin-y': 8, 'text-background-color': '#071017', 'text-background-opacity': .88, 'text-background-padding': '2px', width: 34, height: 34, 'border-width': 1, 'border-color': '#9fe9f7' } },
+      { selector: 'node[type = "event"]', style: { shape: 'round-rectangle', 'background-color': '#e3a84f', 'border-color': '#ffd58d' } },
+      { selector: 'node[type = "entity"]', style: { shape: 'hexagon', 'background-color': '#4fc4df' } },
+      { selector: 'node[entity_type = "organization"]', style: { 'background-color': '#7f76e8' } },
+      { selector: 'node[entity_type = "geographic_region"]', style: { shape: 'round-triangle', 'background-color': '#46ba91' } },
+      { selector: 'node[entity_type = "vulnerability"]', style: { shape: 'diamond', 'background-color': '#e86274' } },
+      { selector: 'edge', style: { width: 1.6, 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'line-color': '#46ba91', 'target-arrow-color': '#46ba91', opacity: .72 } },
+      { selector: 'edge[semantic_tier = "documented"]', style: { 'line-color': '#4fc4df', 'target-arrow-color': '#4fc4df' } },
+      { selector: 'edge[semantic_tier = "supported_inference"]', style: { 'line-style': 'dashed', 'line-color': '#e3a84f', 'target-arrow-color': '#e3a84f', label: 'data(visual_label)', color: '#e3c37b', 'font-size': 7, 'text-background-color': '#071017', 'text-background-opacity': .9 } },
+      { selector: 'edge[semantic_tier = "contextual"]', style: { 'line-style': 'dotted', 'line-color': '#82929e', 'target-arrow-color': '#82929e', opacity: .5 } },
+      { selector: 'edge[semantic_tier = "hypothesis"]', style: { 'line-style': 'dotted', 'line-color': '#c77bd8', 'target-arrow-color': '#c77bd8' } },
+      { selector: 'edge[semantic_tier = "contradicted"]', style: { 'line-style': 'dashed', width: 3, 'line-color': '#e86274', 'target-arrow-color': '#e86274' } },
+      { selector: ':selected', style: { 'overlay-color': '#69d2ee', 'overlay-opacity': .2, 'overlay-padding': 8 } },
+    ], layout: { name: 'breadthfirst', directed: true, spacingFactor: 1.5, padding: 45, animate: false } as LayoutOptions })
+    cy.on('tap', 'node, edge', event => setSelected(event.target.data()))
+    cy.on('dbltap', 'node', event => setFocus(event.target.id()))
+    graph.current = cy
+    return () => cy.destroy()
+  }, [data])
+
+  useEffect(() => {
+    graph.current?.nodes().forEach(node => {
+      node.style('opacity', !search || String(node.data('label')).toLowerCase().includes(search.toLowerCase()) ? 1 : .12)
+    })
+  }, [search])
+  return <><header className="section-heading"><div><span className="eyebrow">PERSISTENT INTELLIGENCE ONTOLOGY</span><h1>Intelligence knowledge graph</h1></div><button className="secondary" onClick={() => host.current?.parentElement?.requestFullscreen()}><Fullscreen size={15} /> Fullscreen</button></header>
+    <div className="notice"><ShieldCheck size={20} /><div><strong>Layered relationship semantics</strong><p>{data?.semantics.causal_boundary || 'Observed facts, documented dependencies, analytical inferences, contextual associations, and hypotheses remain visually and analytically distinct.'}</p></div></div>
+    <div className="graph-filterbar"><label><Search size={14} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find event or entity" /></label><label>Window<select value={days} onChange={event => setDays(Number(event.target.value))}><option value={7}>7d</option><option value={30}>30d</option><option value={90}>90d</option><option value={365}>1y</option></select></label><label>Domain<input value={domain} onChange={event => setDomain(event.target.value)} placeholder="All" /></label><label>Entity type<select value={entityType} onChange={event => setEntityType(event.target.value)}><option value="">All</option><option value="organization">Organization</option><option value="service">Service</option><option value="autonomous_system">Autonomous system</option><option value="geographic_region">Geographic region</option><option value="vulnerability">Vulnerability</option></select></label><label className="context-toggle"><input type="checkbox" checked={includeContext} onChange={event => setIncludeContext(event.target.checked)} /> Include contextual associations</label></div>
+    <div className="graph-shell"><div className="graph-stage">{!data && <Status error={error} />}<div className="cy" ref={host} /><div className="legend"><span className="observed">Observed</span><span className="reported">Documented</span><span className="inferred">Supported inference</span><span className="hypothesis">Hypothesis</span><span className="contradiction">Contradicted</span></div></div><KnowledgeInspector data={selected} onExpand={setFocus} /></div>
+  </>
+}
+
+function KnowledgeInspector({ data, onExpand }: { data: Record<string, unknown> | null; onExpand: (id: string) => void }) {
+  if (!data) return <aside className="inspector"><Layers3 size={26} /><h2>Knowledge inspector</h2><p>Select a node or edge to inspect its semantic tier, evidence dimensions, provenance, and causal boundary.</p></aside>
+  return <aside className="inspector active"><span className="eyebrow">{String(data.type || data.predicate || 'knowledge record').replaceAll('_', ' ')}</span><h2>{String(data.label || data.predicate || data.id)}</h2>{Boolean(data.semantic_tier) && <div className={`semantic-callout ${String(data.semantic_tier)}`}><strong>{String(data.semantic_tier).replaceAll('_', ' ')}</strong><span>{data.causal_claim ? 'A causal claim is recorded; inspect its evidence.' : 'No causal or attribution claim is made.'}</span></div>}{['entity_type', 'domain', 'event_type', 'significance', 'relevance', 'evidence_quality', 'correlation_strength', 'causal_confidence', 'observed_at'].map(key => data[key] !== undefined && data[key] !== null ? <dl key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{key.endsWith('_at') ? date(String(data[key])) : typeof data[key] === 'number' && key !== 'significance' ? pct(Number(data[key])) : String(data[key]).replaceAll('_', ' ')}</dd></dl> : null)}{Boolean(data.explanation) && <p>{String(data.explanation)}</p>}{Boolean(data.url) && <a href={String(data.url)} target="_blank" rel="noreferrer">Open source <ExternalLink size={14} /></a>}{Boolean(data.id) && <button className="secondary" onClick={() => onExpand(String(data.id))}>Expand neighborhood</button>}</aside>
 }
 
 const edgeTypes = ['shares_provider', 'shares_asn', 'shares_region', 'reports_same_service', 'depends_on', 'confirmed_dependency', 'temporal_coincidence', 'independent_corroboration', 'observed_network_anomaly', 'suspected_common_cause', 'contradicts_hypothesis']
@@ -318,7 +432,15 @@ function CorrelationCard({ item }: { item: Correlation }) {
 
 function Investigations() {
   const { data, error } = useLoad(api.investigations)
-  return <><header className="section-heading"><div><span className="eyebrow">PERSISTENT WORKSPACES</span><h1>Public investigations</h1></div></header><div className="notice"><FileSearch size={20} /><div><strong>Facts and assertions remain distinct</strong><p>Public summaries expose collected facts and explicitly labeled hypotheses. Management occurs through the authenticated admin API or CLI.</p></div></div>{!data ? <Status error={error} /> : data.items.length === 0 ? <Status empty /> : <div className="card-grid">{data.items.map(item => <article className="panel" key={String(item.id)}><span className="eyebrow">{String(item.state)}</span><h2>{String(item.title)}</h2><p>{String(item.summary)}</p><a href={`/api/public/investigations/${item.id}/export?format=report`}>Readable report</a></article>)}</div>}</>
+  const { data: candidates } = useLoad(api.investigationCandidates)
+  return <><header className="section-heading"><div><span className="eyebrow">PERSISTENT WORKSPACES</span><h1>Investigations and autonomous candidates</h1></div></header><div className="notice"><FileSearch size={20} /><div><strong>Facts and assertions remain distinct</strong><p>Candidate investigations expose why they were surfaced, competing explanations, and unanswered questions. Promotion to a managed investigation remains an authenticated action.</p></div></div>
+    <section className="candidate-section"><div className="panel-title"><h2>Autonomous investigation candidates</h2><span>{candidates?.items.length || 0} awaiting assessment</span></div>{!candidates ? <Status /> : candidates.items.length === 0 ? <Status empty /> : <div className="candidate-grid">{candidates.items.map(item => <InvestigationCandidateCard key={item.stable_id} item={item} />)}</div>}</section>
+    <section className="candidate-section"><div className="panel-title"><h2>Public investigator workspaces</h2><span>Evidence-backed reports</span></div>{!data ? <Status error={error} /> : data.items.length === 0 ? <Status empty /> : <div className="card-grid">{data.items.map(item => <article className="panel" key={String(item.id)}><span className="eyebrow">{String(item.state)}</span><h2>{String(item.title)}</h2><p>{String(item.summary)}</p><a href={`/api/public/investigations/${item.id}/export?format=report`}>Readable report</a></article>)}</div>}</section>
+  </>
+}
+
+function InvestigationCandidateCard({ item }: { item: InvestigationCandidate }) {
+  return <article><span className="badges"><i>{item.priority} priority</i><i>{item.trigger_type.replaceAll('_', ' ')}</i></span><h3>{item.title}</h3><p>{item.rationale}</p><details><summary>Known facts ({item.known_facts.length})</summary><ul>{item.known_facts.map(value => <li key={value}>{value}</li>)}</ul></details><details><summary>Competing explanations ({item.competing_explanations.length})</summary><ul>{item.competing_explanations.map(value => <li key={value}>{value}</li>)}</ul></details><details><summary>Unresolved questions ({item.unresolved_questions.length})</summary><ul>{item.unresolved_questions.map(value => <li key={value}>{value}</li>)}</ul></details></article>
 }
 
 function Analytics() {
@@ -338,11 +460,15 @@ function Sparkline({ values }: { values: number[] }) {
 
 function SourceHealth() {
   const { data, error } = useLoad(api.sourceHealth)
-  return <><header className="section-heading"><div><span className="eyebrow">COLLECTION OPERATIONS</span><h1>Source health</h1></div></header>{!data ? <Status error={error} /> : data.items.length === 0 ? <Status empty /> : <div className="table-wrap"><table><thead><tr><th>Collector</th><th>Status</th><th>Freshness</th><th>Inserted</th><th>Deduplicated</th><th>Last error</th></tr></thead><tbody>{data.items.map(item => <tr key={String(item.collector)}><td>{String(item.collector)}</td><td><span className={`health ${item.status}`}>{String(item.status)}</span></td><td>{date(item.source_freshness_at as string)}</td><td>{String(item.inserted)}</td><td>{String(item.deduplicated)}</td><td>{String(item.error || '—')}</td></tr>)}</tbody></table></div>}</>
+  const { data: coverage } = useLoad(api.coverage)
+  return <><header className="section-heading"><div><span className="eyebrow">COLLECTION OPERATIONS</span><h1>Source health and visibility coverage</h1></div></header>
+    {coverage && <><div className="coverage-domain-strip">{coverage.configured_domains.map(value => <span key={value}>{value.replaceAll('_', ' ')}</span>)}</div><div className="notice"><AlertTriangle size={20} /><div><strong>Known visibility gaps</strong><p>{coverage.known_global_gaps.join(' ')}</p></div></div><div className="source-coverage-grid">{coverage.items.map(item => <article key={item.source_id}><span className={`health ${item.status}`}>{item.status.replaceAll('_', ' ')}</span><h3>{item.name}</h3><p>{item.domains.map(value => value.replaceAll('_', ' ')).join(', ')}</p><small>{item.source_role.replaceAll('_', ' ')} · {item.geographic_scope.join(', ')} · {item.languages.join(', ')}</small>{item.gaps.map(gap => <em key={gap}>{gap}</em>)}</article>)}</div></>}
+    {!data ? <Status error={error} /> : data.items.length === 0 ? <Status empty /> : <div className="table-wrap"><table><thead><tr><th>Collector</th><th>Status</th><th>Freshness</th><th>Inserted</th><th>Deduplicated</th><th>Last error</th></tr></thead><tbody>{data.items.map(item => <tr key={String(item.collector)}><td>{String(item.collector)}</td><td><span className={`health ${item.status}`}>{String(item.status)}</span></td><td>{date(item.source_freshness_at as string)}</td><td>{String(item.inserted)}</td><td>{String(item.deduplicated)}</td><td>{String(item.error || '—')}</td></tr>)}</tbody></table></div>}
+  </>
 }
 
 function AdminOperations() {
-  return <><header className="section-heading"><div><span className="eyebrow">PRIVILEGED WORKFLOWS</span><h1>Administrative operations</h1></div></header><div className="notice"><ShieldCheck size={20} /><div><strong>No secret is accepted by this dashboard</strong><p>Collection, moderation, assessments, and investigation changes use the authenticated admin API or the server-side CLI. Tokens never enter browser storage or frontend assets.</p></div></div><div className="terminal"><code>docker compose exec -T worker python -m app.cli collect --days 365</code><code>docker compose exec -T worker python -m app.cli collect-measurements --days 30</code><code>docker compose exec -T worker python -m app.cli correlate --days 30</code><code>docker compose exec -T worker python -m app.cli health</code></div><div className="panel"><h2>Operational endpoints</h2><p><a href="/health">Liveness</a> · <a href="/ready">Readiness</a> · <a href="/docs">OpenAPI documentation</a> · <a href="/metrics">Prometheus metrics</a></p></div></>
+  return <><header className="section-heading"><div><span className="eyebrow">PRIVILEGED WORKFLOWS</span><h1>Administrative operations</h1></div></header><div className="notice"><ShieldCheck size={20} /><div><strong>No secret is accepted by this dashboard</strong><p>Collection, moderation, assessments, and investigation changes use the authenticated admin API or the server-side CLI. Tokens never enter browser storage or frontend assets.</p></div></div><div className="terminal"><code>docker compose exec -T worker python -m app.cli collect --days 365</code><code>docker compose exec -T worker python -m app.cli collect-measurements --days 30</code><code>docker compose exec -T worker python -m app.cli correlate --days 30</code><code>docker compose exec -T worker python -m app.cli fusion --days 90</code><code>docker compose exec -T worker python -m app.cli health</code></div><div className="panel"><h2>Operational endpoints</h2><p><a href="/health">Liveness</a> · <a href="/ready">Readiness</a> · <a href="/docs">OpenAPI documentation</a> · <a href="/metrics">Prometheus metrics</a></p></div></>
 }
 
 export default function App() {
@@ -350,5 +476,6 @@ export default function App() {
   const [focus, setFocus] = useState('')
   const navigate = (section: string) => setActive(section)
   const focusGraph = (id: string) => { setFocus(id); setActive('topology') }
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span><Network /></span><div><strong>OSINT</strong><small>Correlation Engine</small></div></div><nav aria-label="Primary navigation">{sections.map(([id, label, Icon]) => <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={17} />{label}</button>)}</nav><div className="sidebar-foot"><span className="live-dot" /> Public read-only view<small>Evidence over narrative</small></div></aside><main><div className="mobile-brand"><Network /> OSINT Correlation Engine</div>{active === 'overview' && <Overview onNavigate={navigate} />}{active === 'timeline' && <Timeline onFocus={focusGraph} />}{active === 'topology' && <Topology initialFocus={focus} />}{active === 'correlations' && <Correlations />}{active === 'investigations' && <Investigations />}{active === 'analytics' && <Analytics />}{active === 'health' && <SourceHealth />}{active === 'admin' && <AdminOperations />}</main></div>
+  const inspectMappedEvent = (id: number) => { setFocus(`event:${id}`); setActive('knowledge') }
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span><Network /></span><div><strong>OSINT</strong><small>Fusion Platform</small></div></div><nav aria-label="Primary navigation">{sections.map(([id, label, Icon]) => <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={17} />{label}</button>)}</nav><div className="sidebar-foot"><span className="live-dot" /> Public read-only view<small>Evidence over narrative</small></div></aside><main><div className="mobile-brand"><Network /> OSINT Intelligence Fusion</div>{active === 'overview' && <Overview onNavigate={navigate} />}{active === 'situation' && <GlobalSituation onEvent={inspectMappedEvent} />}{active === 'timeline' && <Timeline onFocus={focusGraph} />}{active === 'knowledge' && <IntelligenceGraph initialFocus={focus} />}{active === 'topology' && <Topology initialFocus={focus} />}{active === 'correlations' && <Correlations />}{active === 'investigations' && <Investigations />}{active === 'analytics' && <Analytics />}{active === 'health' && <SourceHealth />}{active === 'admin' && <AdminOperations />}</main></div>
 }

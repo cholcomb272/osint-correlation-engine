@@ -298,7 +298,15 @@ def topology(
                 }
 
     selected_ids = set(event_by_id)
-    candidates = candidate_correlations(db, days=days, cutoff=now, limit=1000)
+    # The graph is paginated, so correlation evaluation must be bounded to the
+    # selected page/neighborhood rather than recomputing every pair in history.
+    candidates = candidate_correlations(
+        db,
+        days=days,
+        cutoff=now,
+        limit=1000,
+        event_ids=selected_ids,
+    )
     evidence_summary = {
         "direct_observations": 0,
         "confirmed_dependencies": 0,

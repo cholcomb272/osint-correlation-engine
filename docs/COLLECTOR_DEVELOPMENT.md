@@ -4,6 +4,13 @@ Structured RSS/Atom sources are registered in `app/data/sources.json`. Other
 collectors must implement the `Collector` protocol in `app.collectors.base` or
 provide an adapter with equivalent `CollectorResult` semantics.
 
+Registry `adapter` values route documented JSON/GeoJSON sources through pure
+parsers in `app/collectors/structured.py`. Each adapter must retain a stable
+publisher identifier, source event ID, coordinates only when supplied by the
+source, hierarchical domain/event type, and distinct source occurrence and
+publication timestamps. Add fixture-based parser tests before enabling a live
+endpoint.
+
 Required properties:
 
 - public, documented, passive data access;

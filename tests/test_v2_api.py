@@ -123,3 +123,81 @@ def test_replay_does_not_use_future_report(monkeypatch):
         assert replay.status_code == 200
         assert len(replay.json()["incidents"]) == 1
         assert replay.json()["correlations"] == []
+
+
+def test_public_intelligence_graph_map_and_uncertainty_endpoints(monkeypatch):
+    headers = {"Authorization": "Bearer test-admin-token"}
+    now = datetime.now(timezone.utc)
+    with client(monkeypatch) as api:
+        created = api.post(
+            "/api/events",
+            headers=headers,
+            json={
+                "source": "hazard-observer",
+                "title": "Significant flood in Test Valley",
+                "url": "https://example.org/events/test-flood",
+                "observed_at": now.isoformat(),
+                "occurrence_at": (now - timedelta(minutes=10)).isoformat(),
+                "category": "natural_hazard",
+                "domain": "environmental_hazard",
+                "event_type": "flood",
+                "significance": "high",
+                "latitude": 40.1,
+                "longitude": -75.2,
+                "location_name": "Test Valley",
+                "raw_metadata": {
+                    "publisher_name": "Hazard Observer",
+                    "source_role": "direct_observation",
+                },
+            },
+        )
+        assert created.status_code == 201
+        event_id = created.json()["id"]
+        intelligence = api.get(f"/api/public/events/{event_id}/intelligence")
+        assert intelligence.status_code == 200
+        assert intelligence.json()["classifications"]["event_type"]["label"] == "flood"
+        assert intelligence.json()["field_assessments"]["attribution"]["knowledge_status"] == "not_applicable"
+
+        graph = api.get("/api/public/knowledge-graph", params={"focus": f"event:{event_id}"})
+        assert graph.status_code == 200
+        assert any(edge["predicate"] == "REPORTED_BY" for edge in graph.json()["edges"])
+        assert all(edge["causal_confidence"] is None for edge in graph.json()["edges"])
+
+        mapped = api.get("/api/public/map?days=1&minimum_significance=moderate")
+        assert mapped.status_code == 200
+        assert any(item["id"] == event_id for item in mapped.json()["items"])
+        coverage = api.get("/api/public/coverage")
+        assert coverage.status_code == 200
+        assert len(coverage.json()["items"]) >= 17
+        assert coverage.json()["known_global_gaps"]
+
+
+def test_intelligence_requirements_are_structured_and_admin_only(monkeypatch):
+    payload = {
+        "name": "Cross-domain European infrastructure",
+        "description": "Prioritize meaningful cross-domain developments.",
+        "priority": "high",
+        "scope": {
+            "domains": ["critical_infrastructure", "cybersecurity"],
+            "regions": ["Europe"],
+            "relationship_types": ["SHARES_INFRASTRUCTURE"],
+        },
+        "trigger_policy": {
+            "minimum_significance": "high",
+            "minimum_relevance": 0.75,
+            "minimum_independent_sources": 2,
+            "require_cross_domain": True,
+            "create_investigation_candidate": True,
+        },
+    }
+    with client(monkeypatch) as api:
+        assert api.post("/api/admin/intelligence-requirements", json=payload).status_code == 401
+        created = api.post(
+            "/api/admin/intelligence-requirements",
+            headers={"Authorization": "Bearer test-admin-token"},
+            json=payload,
+        )
+        assert created.status_code == 201
+        public = api.get("/api/public/intelligence-requirements").json()["items"]
+        assert public[0]["scope"]["domains"] == ["critical_infrastructure", "cybersecurity"]
+        assert public[0]["trigger_policy"]["minimum_independent_sources"] == 2

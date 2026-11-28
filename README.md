@@ -1,17 +1,21 @@
-# OSINT Correlation Engine 2.0
+# OSINT Correlation Engine — Global Intelligence Fusion
 
-An evidence-driven, open-source platform for collecting, normalizing, correlating, and investigating public infrastructure disruption data.
+An evidence-driven, open-source platform for collecting, normalizing, correlating, and investigating public global events and infrastructure disruption data.
 
 The engine helps network engineers, SREs, and researchers distinguish technical relationships from timing coincidences. It does **not** independently establish cyberattack attribution. Correlation strength is an explainable heuristic, never a probability.
 
 ## What is included
 
 - Credential-free public React/TypeScript dashboard
+- Global event map, unified multidomain timeline, persistent intelligence knowledge graph, and field-level uncertainty inspector
+- Hierarchical, multi-label event classification across cyber, internet, infrastructure, strategic, and natural-event domains
+- Autonomous evidence-connected clusters and investigation candidates with competing explanations and unresolved questions
 - Evidence-first Cytoscape topology with deterministic provider/ASN investigation layout; inferred candidates and hypotheses are opt-in
 - FastAPI public and authenticated administrative APIs
 - PostgreSQL storage with additive Alembic migrations
 - Dedicated scheduled collection worker with checkpoints and health history
 - Official provider status feeds plus multi-publisher infrastructure/security disclosure feeds
+- Structured USGS earthquake, GDACS hazard, NASA EONET, NOAA space-weather, and CISA KEV collection
 - Passive RIPEstat BGP update activity and IODA outage-event telemetry
 - Bounded, incident-aware ASN target discovery using RIPEstat announced prefixes
 - Evidence-strength and telemetry-coverage panels showing representative prefixes, ASN/provider scope, cadence, and missing sources
@@ -52,6 +56,7 @@ The worker collects automatically. Administrators can trigger an idempotent back
 docker compose exec -T worker python -m app.cli collect --days 365
 docker compose exec -T worker python -m app.cli collect-measurements --days 30
 docker compose exec -T worker python -m app.cli correlate --days 30
+docker compose exec -T worker python -m app.cli fusion --days 90
 docker compose exec -T worker python -m app.cli health
 ```
 
@@ -70,7 +75,9 @@ Feed backfill reaches only as far as publishers retain entries. The platform nev
 
 Feed coverage is defined in `app/data/sources.json`. The bundled registry includes
 official provider status and national CERT/advisory sources alongside Federal
-News Network, BleepingComputer, and The Record disclosure feeds. Disclosure
+News Network, BleepingComputer, and The Record disclosure feeds. Structured
+adapters cover significant earthquakes, global disaster alerts, open natural
+events, space-weather alerts, and known exploited vulnerabilities. Disclosure
 publishers are never normalized as affected infrastructure providers. General
 news is filtered, reported breaches retain cause classification `unknown`, and
 multiple articles naming the same service are labeled repeated reporting rather
@@ -84,6 +91,9 @@ the feed collector's outbound allowlist.
 curl -fsS 'http://127.0.0.1:8787/api/public/incidents?days=30&page_size=50'
 curl -fsS 'http://127.0.0.1:8787/api/public/correlations?days=30&hours=24'
 curl -fsS 'http://127.0.0.1:8787/api/public/topology?days=30&page_size=100'
+curl -fsS 'http://127.0.0.1:8787/api/public/knowledge-graph?days=30&page_size=100'
+curl -fsS 'http://127.0.0.1:8787/api/public/map?days=30'
+curl -fsS 'http://127.0.0.1:8787/api/public/coverage'
 curl -fsS --get 'http://127.0.0.1:8787/api/public/replay' \
   --data-urlencode 'cutoff=2026-11-18T09:00:00Z' --data 'days=30'
 ```

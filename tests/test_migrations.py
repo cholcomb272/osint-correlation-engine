@@ -28,5 +28,16 @@ def test_existing_prototype_row_survives_upgrade(tmp_path, monkeypatch):
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT title FROM events WHERE id=1")) == "Preserved event"
         assert connection.scalar(text("SELECT cause_classification FROM events WHERE id=1")) == "unknown"
+        assert connection.scalar(text("SELECT domain FROM events WHERE id=1")) == "infrastructure"
+        assert connection.scalar(text("SELECT event_type FROM events WHERE id=1")) == "service_incident"
     tables = set(inspect(engine).get_table_names())
     assert {"evidence_artifacts", "investigations", "correlations", "alembic_version"} <= tables
+    assert {
+        "intelligence_entities",
+        "event_classifications",
+        "event_field_assessments",
+        "knowledge_relationships",
+        "event_clusters",
+        "intelligence_requirements",
+        "source_coverage_snapshots",
+    } <= tables

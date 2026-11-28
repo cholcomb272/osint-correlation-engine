@@ -1,4 +1,7 @@
-import type { GraphResponse, Incident, Correlation } from './types'
+import type {
+  Correlation, CoverageSource, EventIntelligenceResponse, GraphResponse, Incident, IntelligenceCluster,
+  InvestigationCandidate, KnowledgeGraphResponse,
+} from './types'
 
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Accept: 'application/json' } })
@@ -14,4 +17,17 @@ export const api = {
   trends: (dimension = 'provider') => get<{ items: Array<Record<string, unknown>> }>(`/api/public/trends?days=90&dimension=${dimension}`),
   sourceHealth: () => get<{ items: Array<Record<string, unknown>> }>('/api/public/source-health'),
   investigations: () => get<{ items: Array<Record<string, unknown>> }>('/api/public/investigations'),
+  map: (days = 30, domain = '', minimumSignificance = 'low') => {
+    const query = new URLSearchParams({ days: String(days), minimum_significance: minimumSignificance })
+    if (domain) query.set('domain', domain)
+    return get<{ items: Incident[]; coverage_warning: string }>(`/api/public/map?${query}`)
+  },
+  knowledgeGraph: (query: URLSearchParams) => get<KnowledgeGraphResponse>(`/api/public/knowledge-graph?${query}`),
+  clusters: () => get<{ items: IntelligenceCluster[]; semantics: string }>('/api/public/clusters?days=30'),
+  investigationCandidates: () => get<{ items: InvestigationCandidate[] }>('/api/public/investigation-candidates'),
+  coverage: () => get<{ items: CoverageSource[]; configured_domains: string[]; known_global_gaps: string[] }>('/api/public/coverage'),
+  eventIntelligence: (eventId: number) => get<EventIntelligenceResponse>(`/api/public/events/${eventId}/intelligence`),
+  entities: (query = '') => get<{ items: Array<Record<string, unknown>>; total: number }>(
+    `/api/public/entities?page_size=100${query.length >= 2 ? `&q=${encodeURIComponent(query)}` : ''}`,
+  ),
 }

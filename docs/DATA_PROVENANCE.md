@@ -15,6 +15,11 @@
   activity for a bounded set of public prefixes originated by configured or
   recently observed incident ASNs; not proof of provider-wide impact.
 - IODA outage events: passive public anomaly events; data-source and method metadata are retained.
+- USGS significant-earthquake GeoJSON: authoritative earthquake observations with source coordinates and occurrence times.
+- GDACS event feed: international hazard alerts and severity metadata; alerts are not proof of infrastructure impact.
+- NASA EONET: open natural-event records with source-provided geometry and category metadata.
+- NOAA SWPC alerts: official space-weather alert messages and issuance times.
+- CISA Known Exploited Vulnerabilities: vulnerability exploitation catalog entries; catalog inclusion is not an infrastructure outage or attribution claim.
 
 No historical BGP, DNS, traffic, or outage data is fabricated when a source is unavailable.
 

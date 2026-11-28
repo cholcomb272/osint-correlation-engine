@@ -123,6 +123,15 @@ class Event(Base):
     service: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     datacenter: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     source_event_id: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+    domain: Mapped[str] = mapped_column(String(60), default="general", index=True)
+    event_type: Mapped[str] = mapped_column(String(100), default="unclassified", index=True)
+    significance: Mapped[str] = mapped_column(String(30), default="unknown", index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    location_name: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+    language: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ontology_version: Mapped[str] = mapped_column(String(30), default="fusion-v1")
 
 
 class Evidence(Base):
@@ -189,8 +198,17 @@ class EventIn(BaseModel):
     service: str | None = Field(default=None, max_length=200)
     datacenter: str | None = Field(default=None, max_length=200)
     source_event_id: str | None = Field(default=None, max_length=300)
+    domain: str = Field(default="general", min_length=1, max_length=60)
+    event_type: str = Field(default="unclassified", min_length=1, max_length=100)
+    significance: str = Field(default="unknown", min_length=1, max_length=30)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    location_name: str | None = Field(default=None, max_length=300)
+    language: str | None = Field(default=None, max_length=20)
+    extraction_confidence: float | None = Field(default=None, ge=0, le=1)
+    ontology_version: str = Field(default="fusion-v1", min_length=1, max_length=30)
 
-    @field_validator("source", "title", "category")
+    @field_validator("source", "title", "category", "domain", "event_type", "significance", "ontology_version")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
         value = value.strip()
@@ -198,7 +216,10 @@ class EventIn(BaseModel):
             raise ValueError("must not be blank")
         return value
 
-    @field_validator("provider", "asn", "region", "original_timezone", "service", "datacenter", "source_event_id")
+    @field_validator(
+        "provider", "asn", "region", "original_timezone", "service", "datacenter",
+        "source_event_id", "location_name", "language"
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -431,6 +452,14 @@ def fingerprint(source: str, url: str, title: str) -> str:
     return hashlib.sha256(f"{source.strip().casefold()}|{identity}".encode()).hexdigest()
 
 
+def event_fingerprint(event: EventIn) -> str:
+    """Select a stable identity strategy without changing legacy feed hashes."""
+    if event.raw_metadata.get("fingerprint_strategy") == "source_event_id" and event.source_event_id:
+        identity = f"source-event:{event.source_event_id.strip().casefold()}"
+        return hashlib.sha256(f"{event.source.strip().casefold()}|{identity}".encode()).hexdigest()
+    return fingerprint(event.source, event.url, event.title)
+
+
 def extract_region(*values: str) -> str | None:
     for value in values:
         match = REGION_PATTERN.search(value or "")
@@ -482,19 +511,33 @@ def shared_infrastructure(a: Event, b: Event) -> list[str]:
 def insert_event(
     db: Session, event: EventIn, *, refresh_existing: bool = False
 ) -> tuple[Event, bool, bool]:
-    key = fingerprint(event.source, event.url, event.title)
+    key = event_fingerprint(event)
     existing = db.scalar(select(Event).where(Event.fingerprint == key))
     if existing:
         changed = False
         if refresh_existing:
             for field, value in event.model_dump().items():
-                if getattr(existing, field) != value:
+                if value is None:
+                    continue
+                if field in {"collected_at", "retrieval_at"} and getattr(existing, field) is not None:
+                    # These identify the first retained record/evidence retrieval.
+                    # Operational collector freshness is tracked separately.
+                    continue
+                if field in {"occurrence_at", "first_observed_at"} and getattr(existing, field) is not None:
+                    value = min(as_utc(getattr(existing, field)), as_utc(value))
+                current_value = getattr(existing, field)
+                if isinstance(value, datetime) and isinstance(current_value, datetime):
+                    equal = as_utc(current_value) == as_utc(value)
+                else:
+                    equal = current_value == value
+                if not equal:
                     setattr(existing, field, value)
                     changed = True
             if changed:
                 db.commit()
                 db.refresh(existing)
         ensure_event_evidence(db, existing, event)
+        reconcile_event_intelligence(db, existing)
         return existing, False, changed
 
     values = event.model_dump()
@@ -520,7 +563,15 @@ def insert_event(
         raise
     db.refresh(record)
     ensure_event_evidence(db, record, event)
+    reconcile_event_intelligence(db, record)
     return record, True, False
+
+
+def reconcile_event_intelligence(db: Session, record: Event) -> None:
+    """Populate additive ontology records without coupling legacy callers to them."""
+    from app.services.ontology import reconcile_event
+
+    reconcile_event(db, record)
 
 
 def ensure_event_evidence(db: Session, record: Event, event: EventIn) -> None:
@@ -555,13 +606,21 @@ def ensure_event_evidence(db: Session, record: Event, event: EventIn) -> None:
             excerpt=event.detail,
             structured_observation={
                 "category": event.category,
+                "domain": event.domain,
+                "event_type": event.event_type,
                 "provider": event.provider,
                 "asn": event.asn,
                 "region": event.region,
                 "service": event.service,
+                "latitude": event.latitude,
+                "longitude": event.longitude,
             },
             raw_metadata=event.raw_metadata,
-            collection_method="manual_verified" if event.source.startswith("manual") else "public_feed",
+            collection_method=(
+                "manual_verified"
+                if event.source.startswith("manual")
+                else event.raw_metadata.get("collection_method", "public_feed")
+            ),
             reliability=event.source_reliability if event.source_reliability is not None else event.confidence,
             verification_status="verified" if event.source.startswith("manual_verified") else "unverified",
             is_primary_source=bool(event.raw_metadata.get("is_primary_source", event.source != "cisa")),
@@ -1024,6 +1083,15 @@ def classify_feed_item(source: str, item) -> str:
     if kind == "official_advisory":
         return "security_advisory"
 
+    if kind == "environmental_observation":
+        return "natural_hazard"
+
+    if kind == "space_weather_observation":
+        return "environmental_condition"
+
+    if kind == "vulnerability_catalog":
+        return "vulnerability_exploitation"
+
     if kind == "official_news":
         if DISCLOSURE_INCIDENT_PATTERN.search(title) or OPERATIONAL_INCIDENT_PATTERN.search(title):
             return "reported_incident"
@@ -1119,13 +1187,19 @@ def parse_feed(
             "feed_source": source,
             "feed_kind": definition.kind if definition else "provider_status",
             "publisher_name": definition.publisher if definition else source,
+            "source_role": definition.source_role if definition else "official_report",
+            "source_domains": definition.domains if definition else ["general"],
+            "geographic_scope": definition.geographic_scope if definition else ["global"],
+            "languages": definition.languages if definition else ["en"],
             "published": item.get("published"),
             "updated": item.get("updated"),
             "author": item.get("author"),
             "tags": tags,
             "entity_mentions": entity_mentions,
             "reporting_claim_hash": hashlib.sha256(claim_material.encode()).hexdigest() if service else None,
-            "is_primary_source": bool(definition and definition.kind != "publisher_disclosure"),
+            "is_primary_source": bool(
+                definition and definition.source_role in {"direct_observation", "official_report"}
+            ),
         }
         if upstream_source:
             raw_metadata["upstream_source"] = upstream_source
@@ -1152,6 +1226,11 @@ def parse_feed(
                 scheduled_end_at=scheduled_end_at,
                 source_reliability=definition.reliability if definition else 0.8,
                 service=service,
+                domain=(definition.domains[0] if definition and definition.domains else "general"),
+                event_type=category,
+                significance="unknown",
+                language=(definition.languages[0] if definition and definition.languages else None),
+                extraction_confidence=0.75,
                 source_event_id=str(item.get("id") or item.get("guid") or "")[:300] or None,
                 raw_metadata=raw_metadata,
             )
@@ -1174,7 +1253,21 @@ def collect(backfill_days: int = 30) -> dict[str, dict[str, int | str]]:
                 for name, url in SOURCES.items():
                     try:
                         response = fetch_public_source(client, url)
-                        parsed_events = parse_feed(name, response.content, backfill_days)
+                        definition = feed_source(name)
+                        if definition and definition.adapter != "syndication":
+                            from app.collectors.structured import parse_structured_source
+
+                            parsed_events = [
+                                EventIn.model_validate(item)
+                                for item in parse_structured_source(
+                                    definition,
+                                    response.content,
+                                    backfill_days,
+                                    datetime.now(timezone.utc),
+                                )
+                            ]
+                        else:
+                            parsed_events = parse_feed(name, response.content, backfill_days)
                         added = 0
                         updated = 0
                         for event in parsed_events:
