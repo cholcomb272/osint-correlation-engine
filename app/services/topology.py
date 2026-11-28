@@ -24,6 +24,8 @@ def relationship_presentation(relationship: str, basis: str) -> tuple[str, str]:
         return "independently_corroborated", "independent corroboration"
     if basis == "hypothesis":
         return "unverified_hypothesis", f"hypothesis · {readable}"
+    if basis == "reported":
+        return "repeated_reporting_not_technical", f"reported · {readable}"
     if basis == "inferred":
         return "inferred_candidate_not_causal", f"candidate · {readable}"
     return "direct_observation", readable
@@ -300,6 +302,7 @@ def topology(
     evidence_summary = {
         "direct_observations": 0,
         "confirmed_dependencies": 0,
+        "reported_relationships": 0,
         "inferred_relationships": 0,
         "temporal_associations": 0,
         "hypotheses": 0,
@@ -325,6 +328,8 @@ def topology(
                 evidence_summary["temporal_associations"] += 1
             if relationship_basis == "inferred":
                 evidence_summary["inferred_relationships"] += 1
+            if relationship_basis == "reported":
+                evidence_summary["reported_relationships"] += 1
             if edge_types is not None and relationship not in edge_types:
                 continue
             if relationship_basis == "inferred" and not include_inferred:

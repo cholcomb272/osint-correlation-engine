@@ -134,9 +134,11 @@ def measurement_observation_family(measurement: NetworkMeasurement) -> str:
 
 def _shared_upstream(evidence: list[tuple[EvidenceArtifact, str]]) -> set[str]:
     return {
-        (artifact.upstream_source or artifact.publisher).strip().casefold()
+        artifact.upstream_source.strip().casefold()
         for artifact, _ in evidence
-        if (artifact.upstream_source or artifact.publisher).strip()
+        if artifact.upstream_source
+        and artifact.upstream_source.strip()
+        and artifact.upstream_source.strip().casefold() != artifact.publisher.strip().casefold()
     }
 
 
@@ -196,6 +198,21 @@ def evaluate_pair(
         components["semantic_relevance"] = round(min(0.12, semantic_score * 0.12), 4)
         supporting.append("semantic overlap: " + ", ".join(shared_terms))
 
+    left_service = (left.service or "").strip()
+    right_service = (right.service or "").strip()
+    if (
+        left_service
+        and right_service
+        and left_service.casefold() == right_service.casefold()
+        and left_service.casefold() not in {"api", "cloud", "network", "service", "system"}
+    ):
+        components["shared_reported_service"] = 0.15
+        relationships.append("reports_same_service")
+        supporting.append(
+            f"both records explicitly name the same service or platform: {left_service}; "
+            "this may be repeated reporting rather than independent evidence"
+        )
+
     dependency = None
     if left.provider and right.provider:
         dependency = db.scalar(
@@ -231,11 +248,19 @@ def evaluate_pair(
         and len(shared_families) >= 2
         and len(shared_sources) >= 2
     )
-    if left_network or right_network:
+    if left_network and right_network:
         max_z = max(abs(item.z_score or 0) for item in [*left_network, *right_network])
         components["historical_anomaly_magnitude"] = round(min(0.10, max_z / 50), 4)
         relationships.append("observed_network_anomaly")
-        supporting.append(f"public network telemetry has a maximum absolute baseline deviation of {max_z:.2f}")
+        supporting.append(
+            "public network telemetry overlaps both incident scopes and has a maximum "
+            f"absolute baseline deviation of {max_z:.2f}"
+        )
+    elif left_network or right_network:
+        contradicting.append(
+            "network telemetry overlaps only one incident scope; it is context and does "
+            "not support a relationship between the events"
+        )
     if independent_technical:
         components["independent_technical_corroboration"] = 0.10
         relationships.append("independent_corroboration")
@@ -258,13 +283,18 @@ def evaluate_pair(
         )
 
     independent_publishers = left.source.casefold() != right.source.casefold()
-    left_upstream = _shared_upstream(left_artifacts) or {left.source.casefold()}
-    right_upstream = _shared_upstream(right_artifacts) or {right.source.casefold()}
-    if independent_publishers and left_upstream.isdisjoint(right_upstream):
+    left_upstream = _shared_upstream(left_artifacts)
+    right_upstream = _shared_upstream(right_artifacts)
+    if independent_publishers and left_upstream and right_upstream and left_upstream.isdisjoint(right_upstream):
         supporting.append("publishers and known upstream reporting sources differ")
-    elif independent_publishers:
+    elif independent_publishers and left_upstream and right_upstream:
         components["shared_upstream_discount"] = -0.10
         contradicting.append("different publishers appear to derive from the same upstream source")
+    elif independent_publishers:
+        contradicting.append(
+            "publishers differ, but upstream reporting lineage is unknown; publisher "
+            "independence is not independent technical corroboration"
+        )
     else:
         components["same_publisher_discount"] = -0.15
         contradicting.append("same publisher; this is not independent corroboration")
@@ -279,18 +309,26 @@ def evaluate_pair(
         contradicting.append(f"{len(contradictory_artifacts)} linked evidence artifact(s) contradict the relationship")
 
     # Temporal coincidence alone, or time plus broad language, is not enough.
-    technical_components = {
+    # An explicitly shared named service may create a repeated-reporting candidate,
+    # but it remains distinct from technical corroboration and dependency evidence.
+    eligible_components = {
         key for key, value in components.items()
         if value > 0 and key not in {"temporal_proximity", "semantic_relevance"}
     }
-    if not technical_components:
+    if not eligible_components:
         return None
 
     if not relationships:
         relationships.append("temporal_coincidence")
     strength = round(max(0.0, min(1.0, sum(components.values()))), 3)
     confidence = "high" if strength >= 0.75 and independent_technical else "moderate" if strength >= 0.4 else "low"
-    basis = "observed" if independent_technical else "inferred"
+    basis = (
+        "observed"
+        if independent_technical
+        else "reported"
+        if eligible_components == {"shared_reported_service"}
+        else "inferred"
+    )
     explanation = (
         f"Proposed because {supporting[0].lower()} and "
         + "; ".join(supporting[1:])

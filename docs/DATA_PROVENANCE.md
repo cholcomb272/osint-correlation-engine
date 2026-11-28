@@ -4,6 +4,13 @@
 
 - CISA news/advisory RSS: publisher reports, not proof that an infrastructure incident occurred.
 - Cloudflare, GitHub, and Google Cloud status feeds: official provider reports; feed retention bounds backfill.
+- Federal News Network, BleepingComputer, and The Record feeds: secondary
+  disclosure reporting used to discover cross-sector incident claims. Articles
+  are retained as source reports; the publisher is not treated as the affected
+  provider and a reported breach defaults to unknown cause.
+- UK NCSC, CERT-EU, Canadian Centre for Cyber Security, and Australian Cyber
+  Security Centre feeds: official advisory context. Advisories are not treated
+  as operational disruption evidence.
 - RIPEstat announced-prefix discovery and BGP update activity: passive routing
   activity for a bounded set of public prefixes originated by configured or
   recently observed incident ASNs; not proof of provider-wide impact.
@@ -22,6 +29,9 @@ Historical replay uses the earliest available knowledge timestamp and excludes r
 Evidence artifacts store original URL, publisher/upstream source, publication/observation/ingestion/retrieval timestamps, SHA-256 content hash, excerpt or structured observation, collection method, reliability, verification state, and bounded raw metadata. User-entered notes are explicitly labeled `investigator_assertion`.
 
 Publisher independence and independent technical corroboration are different fields.
+Articles that explicitly name the same service may be linked as
+`reports_same_service`. That relationship means repeated reporting of a named
+subject; it is not a dependency, causal claim, or technical corroboration.
 Telemetry system names are also distinct from observation modalities. For
 example, RIPE RIS BGP activity and an IODA BGP-derived event remain one
 `bgp_control_plane` modality, not two independent technical observations.

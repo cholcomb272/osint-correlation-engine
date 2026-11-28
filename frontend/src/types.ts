@@ -23,6 +23,7 @@ export interface GraphElement {
 export interface EvidenceSummary {
   direct_observations: number
   confirmed_dependencies: number
+  reported_relationships: number
   inferred_relationships: number
   temporal_associations: number
   hypotheses: number

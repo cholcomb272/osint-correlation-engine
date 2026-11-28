@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -34,6 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 logger = logging.getLogger(__name__)
 
 from app.logging_config import configure_logging
+from app.collector_sources import FeedSource, load_feed_sources
 from app.services.network_targets import (
     NetworkTarget,
     build_asn_scopes,
@@ -288,12 +290,8 @@ class MeasurementIn(BaseModel):
         return value
 
 
-SOURCES = {
-    "cisa": "https://www.cisa.gov/news.xml",
-    "cloudflare": "https://www.cloudflarestatus.com/history.rss",
-    "github": "https://www.githubstatus.com/history.rss",
-    "google_cloud": "https://status.cloud.google.com/en/feed.atom",
-}
+FEED_SOURCES = load_feed_sources()
+SOURCES = {source_id: source.url for source_id, source in FEED_SOURCES.items()}
 
 PROVIDER_METADATA = {
     "cloudflare": {"asn": "AS13335", "prefix": "1.1.1.0/24"},
@@ -331,6 +329,45 @@ SEMANTIC_STOPWORDS = {
     "service", "services", "status", "the", "their", "this", "with", "were",
 }
 
+DISCLOSURE_INCIDENT_PATTERN = re.compile(
+    r"\b(?:breach(?:ed|es)?|hack(?:ed|ers?|ing)?|cyber[ -]?attack(?:ed|s)?|"
+    r"ransomware(?: attack)?|intrusion|compromis(?:e|ed)|unauthori[sz]ed access|"
+    r"data (?:leak|breach|exposure)|denial[ -]of[ -]service|ddos)\b",
+    re.IGNORECASE,
+)
+OPERATIONAL_INCIDENT_PATTERN = re.compile(
+    r"\b(?:outage|disruption|degraded|unavailable|offline|service failure|"
+    r"network failure|systems? (?:are )?down|reachability (?:loss|failure))\b",
+    re.IGNORECASE,
+)
+ADVISORY_PATTERN = re.compile(
+    r"\b(?:advisory|vulnerabilit(?:y|ies)|patch(?:es|ing)?|security update|"
+    r"known exploited|malware analysis|guidance)\b",
+    re.IGNORECASE,
+)
+POLICY_PATTERN = re.compile(
+    r"\b(?:policy|strategy|initiative|reporting form|request for comment|"
+    r"announces? (?:a |an |the )?(?:program|partnership|appointment))\b",
+    re.IGNORECASE,
+)
+INFRASTRUCTURE_ENTITY_PATTERN = re.compile(
+    r"\b(?:cloud|platform|environment|network|service|system|application|"
+    r"datacenter|data center|gateway|cluster)\b",
+    re.IGNORECASE,
+)
+CAPITALIZED_ENTITY_PATTERN = re.compile(
+    r"\b[A-Z][A-Za-z0-9&.'-]*(?:\s+(?:[A-Z][A-Za-z0-9&.'-]*|of|the|and)){1,5}\b"
+)
+QUOTED_NAME_PATTERN = re.compile(r"[\"“]([^\"”]{2,100})[\"”]")
+NAMED_INFRASTRUCTURE_PATTERN = re.compile(
+    r"\b((?:Cloud|Platform|Network|Service|System|Application|Gateway|Cluster)"
+    r"(?:\s+[A-Z][A-Za-z0-9&.'-]*){0,2})\b"
+)
+SUFFIXED_INFRASTRUCTURE_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z0-9&.'-]*\s+"
+    r"(?:Cloud|Platform|Network|Service|System|Application|Gateway|Cluster))\b"
+)
+
 COLLECT_LOCK = threading.Lock()
 MEASUREMENT_COLLECT_LOCK = threading.Lock()
 
@@ -339,6 +376,11 @@ def as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def feed_source(source: str) -> FeedSource | None:
+    """Return source metadata while retaining compatibility with test registries."""
+    return FEED_SOURCES.get(source)
 
 
 def validate_collector_url(url: str) -> None:
@@ -503,8 +545,8 @@ def ensure_event_evidence(db: Session, record: Event, event: EventIn) -> None:
         artifact = EvidenceArtifact(
             stable_id=stable_id,
             original_url=event.url,
-            publisher=event.source,
-            upstream_source=event.raw_metadata.get("upstream_source") or event.source,
+            publisher=event.raw_metadata.get("publisher_name") or event.source,
+            upstream_source=event.raw_metadata.get("upstream_source"),
             published_at=event.publisher_reported_at or event.observed_at,
             observed_at=event.first_observed_at or event.observed_at,
             ingested_at=record.ingested_at,
@@ -522,7 +564,7 @@ def ensure_event_evidence(db: Session, record: Event, event: EventIn) -> None:
             collection_method="manual_verified" if event.source.startswith("manual") else "public_feed",
             reliability=event.source_reliability if event.source_reliability is not None else event.confidence,
             verification_status="verified" if event.source.startswith("manual_verified") else "unverified",
-            is_primary_source=event.source != "cisa",
+            is_primary_source=bool(event.raw_metadata.get("is_primary_source", event.source != "cisa")),
         )
         db.add(artifact)
         db.flush()
@@ -919,50 +961,107 @@ def collect_network_measurements(
         MEASUREMENT_COLLECT_LOCK.release()
 
 
+def clean_feed_text(value: str) -> str:
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", value or "")).split())
+
+
+def extract_entity_mentions(title: str, detail: str, tags: list[str]) -> list[str]:
+    """Extract transparent entity hints without claiming an infrastructure role."""
+    candidates = [*tags]
+    candidates.extend(match.group(0) for match in CAPITALIZED_ENTITY_PATTERN.finditer(f"{title} {detail}"))
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        normalized = clean_feed_text(value).strip(" .,:;–—-")
+        folded = normalized.casefold()
+        if not normalized or len(normalized) > 100 or folded in seen:
+            continue
+        seen.add(folded)
+        result.append(normalized)
+        if len(result) == 30:
+            break
+    return result
+
+
+def extract_reported_service(title: str, detail: str, tags: list[str]) -> str | None:
+    """Extract an explicitly named service/platform, not an inferred provider."""
+    for match in QUOTED_NAME_PATTERN.finditer(title):
+        candidate = clean_feed_text(match.group(1))
+        if INFRASTRUCTURE_ENTITY_PATTERN.search(candidate) or len(candidate.split()) <= 4:
+            return candidate[:200]
+    for pattern in (NAMED_INFRASTRUCTURE_PATTERN, SUFFIXED_INFRASTRUCTURE_PATTERN):
+        match = pattern.search(f"{title} {detail}")
+        if match:
+            return clean_feed_text(match.group(1))[:200]
+    for candidate in [*tags, *(match.group(0) for match in CAPITALIZED_ENTITY_PATTERN.finditer(f"{title} {detail}"))]:
+        candidate = clean_feed_text(candidate)
+        if INFRASTRUCTURE_ENTITY_PATTERN.search(candidate) and len(candidate.split()) <= 6:
+            return candidate[:200]
+    return None
+
+
+def extract_upstream_source(item, detail: str) -> str | None:
+    declared = item.get("source") or {}
+    if isinstance(declared, dict):
+        declared_name = clean_feed_text(str(declared.get("title") or ""))
+        if declared_name:
+            return declared_name[:200]
+    match = re.search(
+        r"\b(?:according to|first reported by|reported by|a report (?:from|by))\s+"
+        r"(?:the\s+)?([A-Z][A-Za-z0-9&.' -]{2,60}?)(?=[,.;]|\s+(?:that|which|who)\b)",
+        detail,
+    )
+    return clean_feed_text(match.group(1))[:200] if match else None
+
+
 def classify_feed_item(source: str, item) -> str:
-    if source == "cisa":
-        title = item.get("title", "")
-        detail = item.get("summary", "") or item.get("description", "")
-        searchable = f"{title} {detail}".casefold()
-        if any(
-            marker in searchable
-            for marker in (
-                "advisory",
-                "alert",
-                "exploited vulnerabilities",
-                "malware",
-                "ransomware",
-                "vulnerability",
-            )
-        ):
+    definition = feed_source(source)
+    kind = definition.kind if definition else "provider_status"
+    title = clean_feed_text(item.get("title", ""))
+    detail = clean_feed_text(item.get("summary", "") or item.get("description", ""))
+    searchable = f"{title} {detail}"
+
+    if kind == "official_advisory":
+        return "security_advisory"
+
+    if kind == "official_news":
+        if DISCLOSURE_INCIDENT_PATTERN.search(title) or OPERATIONAL_INCIDENT_PATTERN.search(title):
+            return "reported_incident"
+        if ADVISORY_PATTERN.search(searchable):
             return "security_advisory"
         return "policy_announcement"
 
-    title = item.get("title", "")
-    detail = item.get("summary", "") or item.get("description", "")
-    searchable = f"{title} {detail}".casefold()
     maintenance_end = item.get("maintenanceenddate") or item.get("maintenance_end_date")
     if maintenance_end or any(
-        marker in searchable
+        marker in searchable.casefold()
         for marker in ("scheduled maintenance", ">scheduled<", " maintenance window")
     ):
         return "scheduled_maintenance"
 
-    if any(
-        marker in searchable
-        for marker in (
-            "incident",
-            "outage",
-            "disruption",
-            "degraded",
-            "investigating",
-            "identified",
-            "monitoring",
-            "resolved",
-        )
+    if kind == "publisher_disclosure":
+        if DISCLOSURE_INCIDENT_PATTERN.search(searchable):
+            return "reported_incident"
+        if OPERATIONAL_INCIDENT_PATTERN.search(searchable):
+            return "service_incident"
+        if ADVISORY_PATTERN.search(searchable):
+            return "security_advisory"
+        if POLICY_PATTERN.search(searchable):
+            return "policy_announcement"
+        return "news_report"
+
+    if OPERATIONAL_INCIDENT_PATTERN.search(searchable) or any(
+        marker in searchable.casefold()
+        for marker in ("incident", "investigating", "identified", "monitoring", "resolved")
     ):
         return "service_incident"
     return "service_notice"
+
+
+def feed_item_is_eligible(source: str, category: str) -> bool:
+    definition = feed_source(source)
+    if not definition or definition.ingest_policy == "all":
+        return True
+    return category in {"reported_incident", "service_incident", "scheduled_maintenance"}
 
 
 def parse_feed(
@@ -973,8 +1072,10 @@ def parse_feed(
     now: datetime | None = None,
 ) -> list[EventIn]:
     parsed = feedparser.parse(content)
-    cutoff = as_utc(now or datetime.now(timezone.utc)) - timedelta(days=backfill_days)
+    collected_at = as_utc(now or datetime.now(timezone.utc))
+    cutoff = collected_at - timedelta(days=backfill_days)
     results: list[EventIn] = []
+    definition = feed_source(source)
 
     for item in parsed.entries:
         stamp = item.get("published_parsed") or item.get("updated_parsed")
@@ -990,6 +1091,12 @@ def parse_feed(
             continue
 
         category = classify_feed_item(source, item)
+        if not feed_item_is_eligible(source, category):
+            continue
+        # A publication timestamp in the future is not an observed incident.
+        # Scheduled maintenance remains eligible and is represented separately.
+        if observed_at > collected_at + timedelta(minutes=5) and category != "scheduled_maintenance":
+            continue
         maintenance_end_stamp = item.get("maintenanceenddate_parsed") or item.get("maintenance_end_date_parsed")
         scheduled_end_at = (
             datetime.fromtimestamp(timegm(maintenance_end_stamp), timezone.utc)
@@ -997,34 +1104,56 @@ def parse_feed(
             else None
         )
 
+        title = clean_feed_text(item.get("title", "Untitled"))[:500]
+        detail = clean_feed_text(item.get("summary", "") or item.get("description", ""))[:4000]
+        tags = [clean_feed_text(tag.get("term", "")) for tag in item.get("tags", []) if tag.get("term")][:20]
+        entity_mentions = extract_entity_mentions(title, detail, tags)
+        service = extract_reported_service(title, detail, tags)
+        if service and service.casefold() not in {value.casefold() for value in entity_mentions}:
+            entity_mentions.insert(0, service)
+        upstream_source = extract_upstream_source(item, detail)
+        claim_material = "|".join(
+            [category, (service or "").casefold(), *(value.casefold() for value in entity_mentions[:10])]
+        )
+        raw_metadata = {
+            "feed_source": source,
+            "feed_kind": definition.kind if definition else "provider_status",
+            "publisher_name": definition.publisher if definition else source,
+            "published": item.get("published"),
+            "updated": item.get("updated"),
+            "author": item.get("author"),
+            "tags": tags,
+            "entity_mentions": entity_mentions,
+            "reporting_claim_hash": hashlib.sha256(claim_material.encode()).hexdigest() if service else None,
+            "is_primary_source": bool(definition and definition.kind != "publisher_disclosure"),
+        }
+        if upstream_source:
+            raw_metadata["upstream_source"] = upstream_source
+
         results.append(
             EventIn(
                 source=source,
-                title=item.get("title", "Untitled")[:500],
+                title=title,
                 url=url,
                 observed_at=observed_at,
                 category=category,
-                # Vendor status feeds identify the affected provider. CISA is a
-                # publisher, not necessarily the provider affected by an advisory.
-                provider=None if source == "cisa" else source,
-                asn=PROVIDER_METADATA.get(source, {}).get("asn"),
-                region=extract_region(
-                    item.get("title", ""), item.get("summary", "")
-                ),
-                confidence=0.8,
-                detail=item.get("summary", "")[:4000],
+                # A reporting publisher is not the affected provider. Provider
+                # identity is assigned only by explicitly configured status feeds.
+                provider=(definition.provider if definition else source),
+                asn=(definition.asn if definition else PROVIDER_METADATA.get(source, {}).get("asn")),
+                region=extract_region(title, detail),
+                confidence=definition.reliability if definition else 0.8,
+                detail=detail,
                 publisher_reported_at=observed_at,
                 first_observed_at=observed_at,
+                collected_at=collected_at,
+                retrieval_at=collected_at,
                 scheduled_start_at=observed_at if category == "scheduled_maintenance" else None,
                 scheduled_end_at=scheduled_end_at,
+                source_reliability=definition.reliability if definition else 0.8,
+                service=service,
                 source_event_id=str(item.get("id") or item.get("guid") or "")[:300] or None,
-                raw_metadata={
-                    "feed_source": source,
-                    "published": item.get("published"),
-                    "updated": item.get("updated"),
-                    "author": item.get("author"),
-                    "tags": [tag.get("term") for tag in item.get("tags", []) if tag.get("term")][:20],
-                },
+                raw_metadata=raw_metadata,
             )
         )
     return results

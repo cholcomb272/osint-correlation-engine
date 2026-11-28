@@ -114,6 +114,62 @@ def test_cisa_policy_news_is_not_an_operational_incident():
     assert classify_feed_item("cisa", item) == "policy_announcement"
 
 
+def test_official_news_direct_incident_disclosure_is_not_downgraded_to_policy():
+    item = {
+        "title": "Agency reports systems breached by hackers",
+        "summary": "The investigation is ongoing.",
+    }
+    assert classify_feed_item("cisa", item) == "reported_incident"
+
+
+def test_disclosure_feed_normalizes_breach_without_claiming_cause_or_provider():
+    xml = b"""<rss><channel><item>
+      <title>Hackers breach agency's &quot;Shared Cloud&quot; environment</title>
+      <description>A breach in Shared Cloud disrupted access to several systems.</description>
+      <link>https://federalnewsnetwork.com/example/generalized-disclosure/</link>
+      <pubDate>Thu, 26 Nov 2026 12:00:00 GMT</pubDate>
+      <category>Government</category><category>Shared Cloud</category>
+    </item></channel></rss>"""
+    parsed = parse_feed(
+        "federal_news_network_technology",
+        xml,
+        30,
+        now=datetime(2026, 11, 27, tzinfo=timezone.utc),
+    )
+    assert len(parsed) == 1
+    event = parsed[0]
+    assert event.category == "reported_incident"
+    assert event.provider is None
+    assert event.service == "Shared Cloud"
+    assert event.cause_classification == "unknown"
+    assert event.raw_metadata["publisher_name"] == "Federal News Network"
+    assert event.raw_metadata["is_primary_source"] is False
+    assert "Shared Cloud" in event.raw_metadata["entity_mentions"]
+
+
+def test_disclosure_feed_filters_general_news_and_future_incident_claims():
+    xml = b"""<rss><channel>
+      <item><title>Agency publishes annual technology strategy</title>
+        <link>https://federalnewsnetwork.com/example/strategy/</link>
+        <pubDate>Thu, 26 Nov 2026 12:00:00 GMT</pubDate></item>
+      <item><title>Hackers breach a public platform</title>
+        <link>https://federalnewsnetwork.com/example/future/</link>
+        <pubDate>Sun, 29 Nov 2026 12:00:00 GMT</pubDate></item>
+    </channel></rss>"""
+    parsed = parse_feed(
+        "federal_news_network_technology",
+        xml,
+        30,
+        now=datetime(2026, 11, 27, tzinfo=timezone.utc),
+    )
+    assert parsed == []
+
+
+def test_official_advisory_feed_is_context_not_an_operational_incident():
+    item = {"title": "Critical vulnerability in a gateway", "summary": "Apply updates."}
+    assert classify_feed_item("cert_eu", item) == "security_advisory"
+
+
 def test_google_cloud_region_is_extracted_from_title():
     title = "RESOLVED: Multiple services were experiencing issues in europe-west2 region"
     assert extract_region(title) == "europe-west2"

@@ -1,0 +1,116 @@
+[
+  {
+    "id": "cisa",
+    "name": "CISA News",
+    "url": "https://www.cisa.gov/news.xml",
+    "kind": "official_news",
+    "publisher": "Cybersecurity and Infrastructure Security Agency",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  },
+  {
+    "id": "cloudflare",
+    "name": "Cloudflare Status",
+    "url": "https://www.cloudflarestatus.com/history.rss",
+    "kind": "provider_status",
+    "publisher": "Cloudflare",
+    "ingest_policy": "all",
+    "reliability": 0.9,
+    "provider": "cloudflare",
+    "asn": "AS13335"
+  },
+  {
+    "id": "github",
+    "name": "GitHub Status",
+    "url": "https://www.githubstatus.com/history.rss",
+    "kind": "provider_status",
+    "publisher": "GitHub",
+    "ingest_policy": "all",
+    "reliability": 0.9,
+    "provider": "github",
+    "asn": "AS36459"
+  },
+  {
+    "id": "google_cloud",
+    "name": "Google Cloud Status",
+    "url": "https://status.cloud.google.com/en/feed.atom",
+    "kind": "provider_status",
+    "publisher": "Google Cloud",
+    "ingest_policy": "all",
+    "reliability": 0.9,
+    "provider": "google_cloud",
+    "asn": "AS15169"
+  },
+  {
+    "id": "federal_news_network_technology",
+    "name": "Federal News Network Technology",
+    "url": "https://federalnewsnetwork.com/category/technology-main/feed/",
+    "kind": "publisher_disclosure",
+    "publisher": "Federal News Network",
+    "ingest_policy": "incidents_only",
+    "reliability": 0.8
+  },
+  {
+    "id": "bleepingcomputer",
+    "name": "BleepingComputer",
+    "url": "https://www.bleepingcomputer.com/feed/",
+    "kind": "publisher_disclosure",
+    "publisher": "BleepingComputer",
+    "ingest_policy": "incidents_only",
+    "reliability": 0.75
+  },
+  {
+    "id": "the_record",
+    "name": "The Record",
+    "url": "https://therecord.media/feed",
+    "kind": "publisher_disclosure",
+    "publisher": "The Record",
+    "ingest_policy": "incidents_only",
+    "reliability": 0.8
+  },
+  {
+    "id": "cisa_advisories",
+    "name": "CISA Cybersecurity Advisories",
+    "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+    "kind": "official_advisory",
+    "publisher": "Cybersecurity and Infrastructure Security Agency",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  },
+  {
+    "id": "ncsc_uk",
+    "name": "UK National Cyber Security Centre",
+    "url": "https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml",
+    "kind": "official_advisory",
+    "publisher": "UK National Cyber Security Centre",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  },
+  {
+    "id": "cert_eu",
+    "name": "CERT-EU Security Advisories",
+    "url": "https://cert.europa.eu/publications/security-advisories-rss",
+    "kind": "official_advisory",
+    "publisher": "CERT-EU",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  },
+  {
+    "id": "cyber_canada",
+    "name": "Canadian Centre for Cyber Security",
+    "url": "https://www.cyber.gc.ca/api/cccs/atom/v1/get?feed=alerts_advisories&lang=en",
+    "kind": "official_advisory",
+    "publisher": "Canadian Centre for Cyber Security",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  },
+  {
+    "id": "cyber_australia",
+    "name": "Australian Cyber Security Centre",
+    "url": "https://www.cyber.gov.au/rss/alerts",
+    "kind": "official_advisory",
+    "publisher": "Australian Cyber Security Centre",
+    "ingest_policy": "all",
+    "reliability": 0.9
+  }
+]

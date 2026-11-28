@@ -11,7 +11,7 @@ The engine helps network engineers, SREs, and researchers distinguish technical 
 - FastAPI public and authenticated administrative APIs
 - PostgreSQL storage with additive Alembic migrations
 - Dedicated scheduled collection worker with checkpoints and health history
-- CISA, Cloudflare Status, GitHub Status, and Google Cloud Status feeds
+- Official provider status feeds plus multi-publisher infrastructure/security disclosure feeds
 - Passive RIPEstat BGP update activity and IODA outage-event telemetry
 - Bounded, incident-aware ASN target discovery using RIPEstat announced prefixes
 - Evidence-strength and telemetry-coverage panels showing representative prefixes, ASN/provider scope, cadence, and missing sources
@@ -67,6 +67,16 @@ unset API_TOKEN POSTGRES_PASSWORD APP_DB_PASSWORD AUDIT_HASH_SALT
 The legacy authenticated `POST /api/collect` endpoint remains compatible. Public reads use `/api/public/*`; legacy `GET /api/events`, `/api/measurements`, and `/api/correlations` are also read-only and public.
 
 Feed backfill reaches only as far as publishers retain entries. The platform never fabricates historical measurements.
+
+Feed coverage is defined in `app/data/sources.json`. The bundled registry includes
+official provider status and national CERT/advisory sources alongside Federal
+News Network, BleepingComputer, and The Record disclosure feeds. Disclosure
+publishers are never normalized as affected infrastructure providers. General
+news is filtered, reported breaches retain cause classification `unknown`, and
+multiple articles naming the same service are labeled repeated reporting rather
+than independent technical corroboration. Operators can replace the registry at
+build/deployment time with `FEED_SOURCE_REGISTRY`; configured HTTPS hosts form
+the feed collector's outbound allowlist.
 
 ## API examples
 

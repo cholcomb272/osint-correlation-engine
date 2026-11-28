@@ -76,7 +76,7 @@ function Timeline({ onFocus }: { onFocus: (id: string) => void }) {
   </>
 }
 
-const edgeTypes = ['shares_provider', 'shares_asn', 'shares_region', 'depends_on', 'confirmed_dependency', 'temporal_coincidence', 'independent_corroboration', 'observed_network_anomaly', 'suspected_common_cause', 'contradicts_hypothesis']
+const edgeTypes = ['shares_provider', 'shares_asn', 'shares_region', 'reports_same_service', 'depends_on', 'confirmed_dependency', 'temporal_coincidence', 'independent_corroboration', 'observed_network_anomaly', 'suspected_common_cause', 'contradicts_hypothesis']
 
 function investigationElements(data: GraphResponse): ElementDefinition[] {
   const nodes = data.nodes.map(node => ({ ...node }))
@@ -207,6 +207,7 @@ function Topology({ initialFocus }: { initialFocus: string }) {
         { selector: 'node[type = "investigation_cluster"]', style: { 'background-color': '#24475a', shape: 'round-rectangle', width: 52, height: 38, 'border-color': '#62bad1', 'border-width': 2 } },
         { selector: 'edge', style: { width: 1.5, 'line-color': '#526778', 'target-arrow-color': '#526778', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', opacity: 0.76, 'font-size': 7, color: '#e3b764', 'text-background-color': '#071017', 'text-background-opacity': 0.9, 'text-background-padding': '2px', 'text-rotation': 'autorotate' } },
         { selector: 'edge[evidence_basis = "observed"]', style: { 'line-style': 'solid', width: 1.6, 'line-color': '#4ebc95', 'target-arrow-color': '#4ebc95', opacity: 0.58 } },
+        { selector: 'edge[evidence_basis = "reported"]', style: { 'line-style': 'dashed', 'line-color': '#62bad1', 'target-arrow-color': '#62bad1', label: 'data(visual_label)' } },
         { selector: 'edge[relationship_type = "observed_on"], edge[relationship_type = "supports_observation"], edge[relationship_type = "observed_network_anomaly"][evidence_basis = "observed"]', style: { 'curve-style': 'taxi', 'taxi-direction': 'auto', 'taxi-turn': 35 } },
         { selector: 'edge[evidence_basis = "inferred"]', style: { 'line-style': 'dashed', 'line-color': '#e7ab54', 'target-arrow-color': '#e7ab54', label: 'data(visual_label)' } },
         { selector: 'edge[evidence_basis = "hypothesis"]', style: { 'line-style': 'dotted', 'line-color': '#d482e5', 'target-arrow-color': '#d482e5', label: 'data(visual_label)' } },
@@ -246,7 +247,7 @@ function Topology({ initialFocus }: { initialFocus: string }) {
     <div className="evidence-mode-controls"><label><input type="checkbox" checked={showInferred} onChange={event => setShowInferred(event.target.checked)} /> Show inferred candidates <small>not causal</small></label><label><input type="checkbox" checked={showHypotheses} onChange={event => setShowHypotheses(event.target.checked)} /> Show investigator hypotheses <small>unverified</small></label></div>
     <details className="edge-filters"><summary>Relationship-type filters ({enabledEdges.length}/{edgeTypes.length})</summary><div>{edgeTypes.map(type => <label key={type}><input type="checkbox" checked={enabledEdges.includes(type)} onChange={() => setEnabledEdges(current => current.includes(type) ? current.filter(item => item !== type) : [...current, type])} />{type.replaceAll('_', ' ')}</label>)}</div></details>
     <div className="graph-shell">
-      <div className="graph-stage">{!data && <Status error={error} />}<div className="cy" ref={host} aria-label="Interactive evidence topology" /><div className="legend"><span className="observed">Direct observation</span><span className="inferred">Candidate — not causal</span><span className="hypothesis">Hypothesis — unverified</span><span className="contradiction">Contradictory evidence</span></div></div>
+      <div className="graph-stage">{!data && <Status error={error} />}<div className="cy" ref={host} aria-label="Interactive evidence topology" /><div className="legend"><span className="observed">Direct observation</span><span className="reported">Repeated reporting</span><span className="inferred">Candidate — not causal</span><span className="hypothesis">Hypothesis — unverified</span><span className="contradiction">Contradictory evidence</span></div></div>
       <Inspector data={selected} onExpand={id => setFocus(id)} />
     </div>
     {data && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>Previous</button><span>Page {page} · {data.pagination.total_incidents} incidents</span><button disabled={!data.pagination.has_next} onClick={() => setPage(value => value + 1)}>Next</button><button onClick={() => setFocus('')}>Clear neighborhood</button></div>}
@@ -257,6 +258,7 @@ function EvidenceStrengthPanel({ summary }: { summary: EvidenceSummary }) {
   const metrics = [
     ['Direct observations', summary.direct_observations, 'Source records and technical observations'],
     ['Confirmed dependencies', summary.confirmed_dependencies, 'Evidence-backed dependency records'],
+    ['Repeated reporting', summary.reported_relationships, 'Same named service; not technical corroboration'],
     ['Inferred candidates', summary.inferred_relationships, 'Hidden by default; not causal'],
     ['Temporal associations', summary.temporal_associations, 'Never sufficient by themselves'],
     ['Hypotheses', summary.hypotheses, 'Investigator assertions; unverified'],
@@ -310,7 +312,8 @@ function Correlations() {
 
 function CorrelationCard({ item }: { item: Correlation }) {
   const [open, setOpen] = useState(false)
-  return <article className="correlation-card"><button onClick={() => setOpen(value => !value)}><span className={`strength ${item.confidence_assessment}`}>{item.strength.toFixed(2)}</span><div><span className="badges"><i className="candidate-badge">{item.evidence_basis === 'observed' ? 'technically observed candidate' : 'inferred · not causal'}</i>{item.relationship_types.map(type => <i key={type}>{type.replaceAll('_', ' ')}</i>)}</span><strong>{item.left.title}</strong><span className="connector">↕ related candidate ↕</span><strong>{item.right.title}</strong></div><small>{open ? 'Collapse' : 'Explain'}</small></button>{open && <div className="explanation"><p>{item.explanation}</p><div><section><h3>Supporting evidence</h3><ul>{item.supporting_factors.map(value => <li key={value}>{value}</li>)}</ul></section><section><h3>Contradictory / limiting evidence</h3>{item.contradictory_factors.length ? <ul>{item.contradictory_factors.map(value => <li key={value}>{value}</li>)}</ul> : <p>No contradictory artifact is currently linked; absence is not confirmation.</p>}</section></div></div>}</article>
+  const basisLabel = item.evidence_basis === 'observed' ? 'technically observed candidate' : item.evidence_basis === 'reported' ? 'repeated reporting · not technical' : 'inferred · not causal'
+  return <article className="correlation-card"><button onClick={() => setOpen(value => !value)}><span className={`strength ${item.confidence_assessment}`}>{item.strength.toFixed(2)}</span><div><span className="badges"><i className="candidate-badge">{basisLabel}</i>{item.relationship_types.map(type => <i key={type}>{type.replaceAll('_', ' ')}</i>)}</span><strong>{item.left.title}</strong><span className="connector">↕ related candidate ↕</span><strong>{item.right.title}</strong></div><small>{open ? 'Collapse' : 'Explain'}</small></button>{open && <div className="explanation"><p>{item.explanation}</p><div><section><h3>Supporting evidence</h3><ul>{item.supporting_factors.map(value => <li key={value}>{value}</li>)}</ul></section><section><h3>Contradictory / limiting evidence</h3>{item.contradictory_factors.length ? <ul>{item.contradictory_factors.map(value => <li key={value}>{value}</li>)}</ul> : <p>No contradictory artifact is currently linked; absence is not confirmation.</p>}</section></div></div>}</article>
 }
 
 function Investigations() {

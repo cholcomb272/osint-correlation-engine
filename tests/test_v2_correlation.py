@@ -43,6 +43,55 @@ def test_simultaneous_unrelated_outages_are_not_candidates():
         assert evaluate_pair(db, left, right) is None
 
 
+def test_one_sided_network_telemetry_does_not_create_a_relationship():
+    engine = database()
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        left = incident(1, "API latency in Tokyo", now, provider="alpha", asn="AS64500")
+        right = incident(2, "Email failure in Virginia", now, provider="beta", asn="AS64501")
+        measurement = NetworkMeasurement(
+            fingerprint="s" * 64,
+            source="ripe_stat",
+            signal_type="bgp_withdrawals",
+            observed_at=now,
+            provider="alpha",
+            asn="AS64500",
+            region=None,
+            resource="prefix",
+            value=20,
+            unit="count",
+            z_score=5,
+            confidence=0.9,
+            url="https://stat.ripe.net/x",
+            detail='{"observation_family":"bgp_control_plane"}',
+        )
+        db.add_all([left, right, measurement])
+        db.commit()
+        assert evaluate_pair(db, left, right, measurements=[measurement]) is None
+
+
+def test_same_named_service_creates_only_a_repeated_reporting_candidate():
+    engine = database()
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        left = incident(1, "Agency platform reportedly breached", now, service="Shared Cloud")
+        right = incident(
+            2,
+            "Hackers accessed Shared Cloud",
+            now + timedelta(minutes=20),
+            service="shared cloud",
+        )
+        db.add_all([left, right])
+        db.commit()
+        result = evaluate_pair(db, left, right)
+        assert result is not None
+        assert result.relationship_types == ["reports_same_service"]
+        assert result.evidence_basis == "reported"
+        assert result.independent_technical_corroboration is False
+        assert result.confidence_assessment == "low"
+        assert "shared_reported_service" in result.score_components
+
+
 def test_common_provider_is_inferred_but_not_called_causal():
     engine = database()
     now = datetime.now(timezone.utc)
@@ -105,6 +154,41 @@ def test_different_publishers_with_same_upstream_are_not_independent_technical_e
         assert result.independent_publishers is True
         assert result.independent_technical_corroboration is False
         assert result.score_components["shared_upstream_discount"] < 0
+
+
+def test_different_publishers_with_unknown_upstream_are_not_claimed_independent():
+    engine = database()
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        left = incident(1, "Platform breach reported", now, service="Shared Cloud")
+        right = incident(2, "Shared Cloud reportedly hacked", now, service="Shared Cloud")
+        artifact_a = EvidenceArtifact(
+            stable_id="ev_unknown_a",
+            original_url="https://a.example/report",
+            publisher="Publisher A",
+            upstream_source=None,
+            content_hash="d" * 64,
+        )
+        artifact_b = EvidenceArtifact(
+            stable_id="ev_unknown_b",
+            original_url="https://b.example/report",
+            publisher="Publisher B",
+            upstream_source=None,
+            content_hash="e" * 64,
+        )
+        db.add_all([left, right, artifact_a, artifact_b])
+        db.flush()
+        db.add_all(
+            [
+                EventEvidence(event_id=1, evidence_id=artifact_a.id, role="supports"),
+                EventEvidence(event_id=2, evidence_id=artifact_b.id, role="supports"),
+            ]
+        )
+        db.commit()
+        result = evaluate_pair(db, left, right)
+        assert result is not None
+        assert any("lineage is unknown" in factor for factor in result.contradictory_factors)
+        assert not any("known upstream reporting sources differ" in factor for factor in result.supporting_factors)
 
 
 def test_independent_network_observations_raise_technical_corroboration():
